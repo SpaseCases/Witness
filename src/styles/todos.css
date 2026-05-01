@@ -1,0 +1,787 @@
+/* ═══════════════════════════════════════════════════════════════════
+   WITNESS — todos.css
+   Dedicated To-Do / Projects screen.
+   Save at: witness/src/styles/todos.css
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── SCREEN WRAPPER ─────────────────────────────────────────────────────── */
+
+.todos-screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 28px 0;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+/* ── ADD ROW ─────────────────────────────────────────────────────────────── */
+
+.todos-add-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.todos-add-input {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 9px 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.todos-add-input::placeholder { color: var(--text-muted); }
+.todos-add-input:focus { border-color: var(--accent); }
+
+.todos-add-btn {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 9px 18px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.todos-add-btn:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.todos-add-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ── FILTER TABS ─────────────────────────────────────────────────────────── */
+
+.todos-filters {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-dim);
+  padding-bottom: 10px;
+}
+
+.todos-filter-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.todos-filter-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
+.todos-filter-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── LIST CONTAINER ──────────────────────────────────────────────────────── */
+
+.todos-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 24px;
+}
+
+.todos-empty {
+  padding: 32px 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+/* ── TASK ROW ────────────────────────────────────────────────────────────── */
+
+.todos-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-dim);
+  padding: 11px 12px;
+  cursor: default;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.todos-row:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
+.todos-row-done {
+  opacity: 0.38;
+}
+
+/* Checkbox */
+.todos-row-check {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  margin-top: 1px;
+  transition: color 0.15s;
+  line-height: 1;
+}
+
+.todos-row-check:hover { color: var(--accent); }
+
+/* Body — takes all remaining space, clickable */
+.todos-row-body {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.todos-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.todos-row-text {
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.4;
+  flex: 1;
+  min-width: 0;
+}
+
+.todos-row-text-done {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-muted);
+  color: var(--text-muted);
+}
+
+.todos-row-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+  align-items: center;
+}
+
+.todos-row-source {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+.todos-row-notes-count {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+/* Badges on rows */
+.todos-row-badges {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Delete button — hidden until row hover */
+.todos-row-delete {
+  background: none;
+  border: none;
+  color: transparent;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 2px 4px;
+  flex-shrink: 0;
+  transition: color 0.15s;
+  margin-top: 1px;
+}
+
+.todos-row:hover .todos-row-delete {
+  color: var(--text-muted);
+}
+
+.todos-row-delete:hover {
+  color: var(--danger-bright) !important;
+}
+
+/* ── BADGES ──────────────────────────────────────────────────────────────── */
+
+.todos-badge {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 2px 5px;
+  border: 1px solid;
+  flex-shrink: 0;
+}
+
+.todos-badge-ai {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.todos-badge-project {
+  color: #60a8d0;
+  border-color: #60a8d0;
+  background: rgba(96, 168, 208, 0.1);
+}
+
+.todos-badge-project-sm {
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 1px 4px;
+  border: 1px solid #60a8d0;
+  color: #60a8d0;
+  background: rgba(96, 168, 208, 0.1);
+}
+
+.todos-badge-done {
+  color: var(--success-bright);
+  border-color: var(--success-bright);
+  background: rgba(80, 168, 112, 0.1);
+}
+
+/* ── DETAIL VIEW ─────────────────────────────────────────────────────────── */
+
+.todos-detail {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  gap: 0;
+  padding-bottom: 32px;
+}
+
+.todos-detail-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  gap: 16px;
+}
+
+.todos-loading-text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: var(--text-muted);
+}
+
+/* Top bar */
+.todos-detail-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  flex-shrink: 0;
+}
+
+.todos-back-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.todos-back-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.todos-detail-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.todos-action-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.todos-action-done {
+  color: var(--success-bright);
+  border-color: var(--success-bright);
+}
+
+.todos-action-done:hover { background: rgba(80, 168, 112, 0.12); }
+
+.todos-action-undone {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+.todos-action-undone:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.todos-action-delete {
+  color: var(--danger-bright);
+  border-color: var(--danger-bright);
+}
+
+.todos-action-delete:hover { background: var(--danger-dim); }
+
+/* Title block */
+.todos-detail-title-block {
+  margin-bottom: 28px;
+  flex-shrink: 0;
+}
+
+.todos-detail-badges {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.todos-detail-title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  letter-spacing: 0.06em;
+  color: var(--text-primary);
+  line-height: 1.2;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 2px;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.todos-detail-title:hover {
+  border-color: var(--border);
+  color: var(--accent);
+}
+
+.todos-detail-title-done {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-muted);
+  color: var(--text-muted);
+}
+
+/* Inline title editing */
+.todos-title-edit-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+.todos-title-input {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 24px;
+  letter-spacing: 0.06em;
+  padding: 6px 10px;
+  outline: none;
+}
+
+.todos-save-btn,
+.todos-cancel-btn {
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  padding: 6px 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.todos-save-btn { color: var(--success-bright); border-color: var(--success-bright); }
+.todos-save-btn:hover { background: rgba(80, 168, 112, 0.12); }
+.todos-cancel-btn:hover { color: var(--text-primary); }
+
+.todos-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.todos-detail-meta-item {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+.todos-meta-done { color: var(--success-bright); }
+
+/* ── DETAIL SECTIONS ─────────────────────────────────────────────────────── */
+
+.todos-detail-section {
+  border-top: 1px solid var(--border-dim);
+  padding-top: 20px;
+  margin-bottom: 24px;
+  flex-shrink: 0;
+}
+
+.todos-section-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+/* Notes */
+.todos-notes-empty {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  padding: 8px 0;
+}
+
+.todos-note-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.todos-note-bullet {
+  color: var(--accent);
+  font-size: 10px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.todos-note-text {
+  flex: 1;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.todos-note-delete {
+  background: none;
+  border: none;
+  color: transparent;
+  font-size: 9px;
+  cursor: pointer;
+  padding: 2px 4px;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.todos-note-row:hover .todos-note-delete {
+  color: var(--text-muted);
+}
+
+.todos-note-delete:hover { color: var(--danger-bright) !important; }
+
+.todos-note-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.todos-note-input {
+  flex: 1;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.todos-note-input::placeholder { color: var(--text-muted); }
+.todos-note-input:focus { border-color: var(--accent); }
+
+.todos-note-add-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.todos-note-add-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.todos-note-add-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* Source transcript */
+.todos-source-transcript {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-dim);
+  border-left: 3px solid var(--accent-dim);
+  padding: 14px 16px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.todos-transcript-empty {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+/* Related todos */
+.todos-related-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.todos-related-check {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.todos-related-done { color: var(--success-bright); }
+
+.todos-related-text {
+  flex: 1;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.todos-related-text-done {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-muted);
+  color: var(--text-muted);
+}
+
+/* ── BULK SELECT ─────────────────────────────────────────────────────────── */
+
+/* The SELECT button in the header */
+.todos-select-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.todos-select-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--text-muted);
+}
+
+/* Controls strip when in select mode */
+.todos-select-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.todos-select-cancel {
+  background: transparent;
+  border: 1px solid var(--border-dim);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.todos-select-cancel:hover {
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
+/* Delete selected button */
+.todos-bulk-delete-btn {
+  background: transparent;
+  border: 1px solid var(--danger, #e05050);
+  color: var(--danger, #e05050);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.todos-bulk-delete-btn:hover {
+  background: rgba(224, 80, 80, 0.1);
+}
+
+/* Inline confirmation bar */
+.todos-bulk-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.todos-bulk-confirm-text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--danger, #e05050);
+}
+
+.todos-bulk-confirm-yes {
+  background: var(--danger, #e05050);
+  border: none;
+  color: #111;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.todos-bulk-confirm-yes:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.todos-bulk-cancel {
+  background: transparent;
+  border: 1px solid var(--border-dim);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.todos-bulk-cancel:hover { color: var(--text-secondary); }
+
+/* Select all row — appears below header when in select mode */
+.todos-select-all-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0 9px;
+  border-bottom: 1px solid var(--border-dim);
+  margin-bottom: 4px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.todos-select-all-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.todos-select-all-label:hover { color: var(--text-secondary); }
+
+.todos-select-count {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  margin-left: auto;
+}
+
+/* Custom square checkbox for bulk select — replaces browser default */
+.todos-bulk-check {
+  width: 16px;
+  height: 16px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.todos-bulk-check:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.todos-bulk-check.checked {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Row highlight when selected */
+.todos-row-selected {
+  border-color: rgba(245, 168, 48, 0.35) !important;
+  background: rgba(245, 168, 48, 0.04) !important;
+}

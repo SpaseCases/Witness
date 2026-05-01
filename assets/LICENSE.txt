@@ -1,0 +1,8 @@
+WITNESS — Private AI Journal
+Copyright 2026
+
+This software is for personal use only.
+All journal data remains on your local machine.
+No data is ever sent to any external server.
+
+Witness is distributed as-is, without warranty of any kind.

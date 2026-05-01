@@ -1,0 +1,296 @@
+/* ─── RANT MODE SCREEN ───────────────────────────────────────────────────── */
+
+.rant-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 2rem 2.5rem;
+  overflow-y: auto;
+  gap: 1.5rem;
+  animation: rant-fadein 0.35s ease-out both;
+}
+
+@keyframes rant-fadein {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.rant-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.rant-backend-warn {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.7rem;
+  color: #e05050;
+  background: rgba(224, 80, 80, 0.08);
+  border: 1px solid rgba(224, 80, 80, 0.3);
+  padding: 0.4rem 0.9rem;
+  border-radius: 2px;
+  letter-spacing: 0.05em;
+  align-self: center;
+}
+
+/* ── Intro ───────────────────────────────────────────────────────────────── */
+
+.rant-intro-block {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 2px;
+  padding: 1.2rem 1.5rem;
+}
+
+.rant-intro-text {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  color: rgba(255,255,255,0.45);
+  line-height: 1.9;
+  letter-spacing: 0.03em;
+}
+
+/* ── Recorder block ─────────────────────────────────────────────────────── */
+
+.rant-recorder-block {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 2px;
+  padding: 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  transition: border-color 0.3s;
+}
+
+.rant-recorder-block.active {
+  border-color: rgba(224, 80, 80, 0.4);
+  background: rgba(224, 80, 80, 0.04);
+}
+
+.rant-timer {
+  font-family: var(--font-mono, monospace);
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: rgba(255,255,255,0.85);
+  letter-spacing: 0.12em;
+}
+
+.rant-waveform-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+  height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rant-waveform-canvas {
+  width: 100%;
+  height: 100px;
+  display: block;
+}
+
+.rant-waveform-idle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.7rem;
+  color: rgba(255,255,255,0.2);
+  letter-spacing: 0.2em;
+  pointer-events: none;
+}
+
+/* ── Controls ────────────────────────────────────────────────────────────── */
+
+.rant-controls {
+  display: flex;
+  justify-content: center;
+}
+
+.rant-begin-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #e05050;
+  color: #fff;
+  border: none;
+  padding: 0.85rem 2.5rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.rant-begin-btn:hover { background: #c94040; }
+.rant-begin-btn:active { transform: scale(0.98); }
+
+.rant-begin-icon {
+  font-size: 0.7rem;
+  animation: rant-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes rant-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.rant-stop-btn {
+  background: rgba(224, 80, 80, 0.15);
+  color: #e05050;
+  border: 1px solid rgba(224, 80, 80, 0.4);
+  padding: 0.85rem 2.5rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.rant-stop-btn:hover { background: rgba(224, 80, 80, 0.25); }
+
+.rant-processing-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.5);
+  letter-spacing: 0.08em;
+}
+
+.rant-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255,255,255,0.1);
+  border-top-color: #e05050;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Result block ────────────────────────────────────────────────────────── */
+
+.rant-result-block {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.rant-result-label {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.65rem;
+  color: rgba(255,255,255,0.3);
+  letter-spacing: 0.18em;
+}
+
+.rant-transcript-box {
+  width: 100%;
+  min-height: 160px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 3px;
+  color: rgba(255,255,255,0.85);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  line-height: 1.7;
+  padding: 1rem 1.2rem;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+
+.rant-transcript-box:focus {
+  border-color: rgba(224, 80, 80, 0.4);
+}
+
+/* ── Tags ────────────────────────────────────────────────────────────────── */
+
+.rant-tags-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.rant-tags-label {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.65rem;
+  color: rgba(255,255,255,0.3);
+  letter-spacing: 0.18em;
+}
+
+.rant-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.rant-tag-chip {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #e05050;
+  background: rgba(224, 80, 80, 0.1);
+  border: 1px solid rgba(224, 80, 80, 0.3);
+  padding: 0.25rem 0.7rem;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* ── Action row ──────────────────────────────────────────────────────────── */
+
+.rant-action-row {
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-end;
+}
+
+.rant-discard-btn {
+  background: transparent;
+  color: rgba(255,255,255,0.35);
+  border: 1px solid rgba(255,255,255,0.1);
+  padding: 0.65rem 1.5rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.rant-discard-btn:hover {
+  color: rgba(255,255,255,0.6);
+  border-color: rgba(255,255,255,0.25);
+}
+
+.rant-save-btn {
+  background: rgba(224, 80, 80, 0.15);
+  color: #e05050;
+  border: 1px solid rgba(224, 80, 80, 0.4);
+  padding: 0.65rem 2rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.rant-save-btn:hover:not(:disabled) { background: rgba(224, 80, 80, 0.25); }
+.rant-save-btn:disabled { cursor: default; }
+.rant-save-btn.saved { color: #50c878; border-color: rgba(80, 200, 120, 0.4); background: rgba(80, 200, 120, 0.1); }
+.rant-save-btn.error { color: #ff6b6b; border-color: rgba(255, 107, 107, 0.5); }

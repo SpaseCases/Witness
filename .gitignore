@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build outputs — don't commit these, they're generated
+dist/
+dist-installer/
+python-backend/dist/
+python-backend/build/
+
+# Database — personal journal data, never commit
+*.db
+*.db-shm
+*.db-wal
+
+# ChromaDB vector store — regenerated from entries on first run
+python-backend/chroma_data/
+
+# Health data
+python-backend/health-inbox/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# PyInstaller artifacts
+*.spec.bak
+*.manifest
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

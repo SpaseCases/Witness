@@ -1,0 +1,490 @@
+
+/* ═══════════════════════════════════════════════════════════════════
+   STEP 9 ADDITIONS — Journal Entry Screen
+   Append this entire block to the bottom of globals.css
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── JOURNAL ENTRY PAGE ──────────────────────────────────────────── */
+
+.journal-entry {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.je-header {
+  flex-shrink: 0;
+}
+
+.je-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── WAVEFORM BLOCK ─────────────────────────────────────────────── */
+
+.je-waveform-block {
+  height: 120px;
+  background: #181818;
+  border: 1px solid #2a2a2a;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: border-color 0.3s;
+  position: relative;
+}
+
+/* Added in Step 12 fix: CSS class replaces gsap.fromTo on borderColor */
+.je-waveform-block.recording-active {
+  border-color: rgba(245, 168, 48, 0.6);
+}
+
+.waveform-canvas {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── STATUS LINE ─────────────────────────────────────────────────── */
+
+.status-line {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  background: #111;
+  border-top: 1px solid #2a2a2a;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 2px;
+  color: #606060;
+  flex-shrink: 0;
+}
+
+.status-recording { color: #f5a830; border-top-color: rgba(245,168,48,0.3); }
+.status-paused     { color: #a09080; }
+.status-transcribing,
+.status-generating { color: #a09080; }
+.status-done       { color: #50a870; }
+.status-saving     { color: #a09080; }
+.status-saved      { color: #50a870; }
+.status-error      { color: #e05050; }
+
+/* ── CONTROLS ────────────────────────────────────────────────────── */
+
+.je-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Base button */
+.je-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 22px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  background: transparent;
+}
+
+.je-btn-icon { font-size: 13px; }
+
+/* Record */
+.je-btn-record {
+  color: #f5a830;
+  border-color: rgba(245,168,48,0.5);
+  background: rgba(245,168,48,0.08);
+}
+.je-btn-record:hover {
+  background: rgba(245,168,48,0.18);
+  border-color: #f5a830;
+  box-shadow: 0 0 18px rgba(245,168,48,0.2);
+}
+
+/* Stop */
+.je-btn-stop {
+  color: #e05050;
+  border-color: rgba(224,80,80,0.5);
+  background: rgba(224,80,80,0.08);
+}
+.je-btn-stop:hover {
+  background: rgba(224,80,80,0.18);
+  border-color: #e05050;
+}
+
+/* Pause */
+.je-btn-pause {
+  color: #a09080;
+  border-color: #383838;
+}
+.je-btn-pause:hover {
+  color: #f0e8dc;
+  border-color: #505050;
+  background: #2a2a2a;
+}
+
+/* Save */
+.je-btn-save {
+  color: #50a870;
+  border-color: rgba(80,168,112,0.5);
+  background: rgba(80,168,112,0.08);
+}
+.je-btn-save:hover {
+  background: rgba(80,168,112,0.18);
+  border-color: #50a870;
+}
+
+/* Ghost / discard */
+.je-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 18px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: #606060;
+  background: transparent;
+  border: 1px solid #2a2a2a;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+}
+.je-btn-ghost:hover {
+  color: #a09080;
+  border-color: #383838;
+}
+
+/* ── WORKING SPINNER ─────────────────────────────────────────────── */
+
+.je-working {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: #a09080;
+}
+
+.working-spinner {
+  width: 14px;
+  height: 14px;
+  border: 1px solid #383838;
+  border-top-color: #f5a830;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── ERROR ────────────────────────────────────────────────────────── */
+
+.je-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  background: rgba(192,64,64,0.1);
+  border: 1px solid rgba(224,80,80,0.35);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #e05050;
+  line-height: 1.6;
+}
+
+.je-error-label {
+  font-size: 8px;
+  letter-spacing: 2px;
+  background: rgba(224,80,80,0.25);
+  padding: 2px 6px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* ── TRANSCRIPT EDITOR ───────────────────────────────────────────── */
+
+.je-transcript-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.je-section-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 2.5px;
+  color: #a09080;
+  text-transform: uppercase;
+}
+
+.je-section-sub {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #606060;
+  margin-top: -4px;
+  margin-bottom: 4px;
+}
+
+.je-transcript-editor {
+  width: 100%;
+  background: #191919;
+  border: 1px solid #2a2a2a;
+  color: #f0e8dc;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.8;
+  padding: 14px 16px;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.je-transcript-editor:focus {
+  border-color: #505050;
+}
+
+.je-transcript-hint {
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  letter-spacing: 1px;
+  color: #505050;
+}
+
+/* ── FOLLOW-UP QUESTIONS ─────────────────────────────────────────── */
+
+.je-questions-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.qa-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.qa-card {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-left: 3px solid rgba(245,168,48,0.4);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.qa-q {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.qa-num {
+  font-family: var(--font-display);
+  font-size: 18px;
+  color: rgba(245,168,48,0.4);
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.qa-text {
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: #f0e8dc;
+  line-height: 1.5;
+}
+
+.qa-answer {
+  width: 100%;
+  background: #141414;
+  border: 1px solid #2a2a2a;
+  color: #a09080;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  padding: 10px 12px;
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.qa-answer:focus {
+  border-color: #383838;
+  color: #f0e8dc;
+}
+
+.qa-answer::placeholder {
+  color: #404040;
+  font-size: 8.5px;
+  letter-spacing: 1px;
+}
+
+/* ── SAVE ROW ────────────────────────────────────────────────────── */
+
+.je-save-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+/* ── SAVE CONFIRMATION ───────────────────────────────────────────── */
+/* CSS animation replaces gsap.from('.save-confirm', ...) which was  */
+/* firing before React had mounted the element (conditional render). */
+
+.save-confirm {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  background: rgba(80,168,112,0.1);
+  border: 1px solid rgba(80,168,112,0.3);
+  animation: save-confirm-in 0.3s ease-out both;
+}
+
+@keyframes save-confirm-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.save-confirm-icon {
+  font-size: 20px;
+  color: #50a870;
+}
+
+.save-confirm-text {
+  font-family: var(--font-display);
+  font-size: 22px;
+  letter-spacing: 4px;
+  color: #50a870;
+}
+
+/* ── RECORD TIMER ────────────────────────────────────────────────── */
+
+.record-timer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timer-display {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  color: #505050;
+  font-weight: 500;
+  transition: color 0.2s;
+  letter-spacing: 2px;
+}
+
+.timer-display.timer-active {
+  color: #f5a830;
+}
+
+.timer-pip {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e05050;
+  animation: breathe 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+/* ── STAR BUTTON ─────────────────────────────────────────────────── */
+
+.star-btn {
+  font-size: 20px;
+  color: #505050;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s, transform 0.15s;
+  line-height: 1;
+  padding: 4px;
+}
+
+.star-btn:hover {
+  color: #f5a830;
+  transform: scale(1.1);
+}
+
+.star-btn.starred {
+  color: #f5a830;
+}
+/* ═══════════════════════════════════════════════════════════════════
+   STEP 16 ADDITIONS — Live Transcription + Dashboard Stats
+   Append this entire block to the BOTTOM of:
+   witness/src/styles/journal-entry.css
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── LIVE TRANSCRIPTION INDICATOR ───────────────────────────────── */
+
+/* "LIVE" badge next to the TRANSCRIPT label */
+.transcript-live-tag {
+  display: inline-block;
+  margin-left: 10px;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 2px;
+  color: #e05050;
+  background: rgba(224, 80, 80, 0.15);
+  border: 1px solid rgba(224, 80, 80, 0.4);
+  padding: 2px 6px;
+  animation: breathe 1.2s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+/* "LISTENING..." text shown before first words arrive */
+.transcript-waiting {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #606060;
+  margin-bottom: 6px;
+  animation: breathe 1.5s ease-in-out infinite;
+}
+
+/* Transcript textarea while showing live partial text — slightly dimmed
+   to signal it's not the final version yet */
+.je-transcript-editor.transcript-partial {
+  color: #a09080;
+  border-color: rgba(245, 168, 48, 0.25);
+}
+
+/* "LIVE" badge in the status line */
+.status-live-badge {
+  margin-left: 12px;
+  font-size: 7px;
+  letter-spacing: 2px;
+  color: #e05050;
+  background: rgba(224, 80, 80, 0.15);
+  border: 1px solid rgba(224, 80, 80, 0.35);
+  padding: 1px 5px;
+  animation: breathe 1.2s ease-in-out infinite;
+}
+
+/* ── DASHBOARD STRESS COLOR CLASSES ─────────────────────────────── */
+/* These are applied to the Avg Stress card value based on score.    */
+/* Add these to globals.css OR here — both work.                     */
+
+.stress-high { color: #e05050 !important; }  /* 7.5-10: red   */
+.stress-mid  { color: #f5a830 !important; }  /* 5-7.4:  amber */
+.stress-low  { color: #50a870 !important; }  /* 0-4.9:  green */

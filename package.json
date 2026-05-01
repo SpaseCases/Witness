@@ -1,0 +1,69 @@
+{
+  "name": "witness",
+  "version": "1.0.0",
+  "description": "Local AI Journal - Private. Honest. Yours.",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
+    "build": "vite build",
+    "dist": "vite build && electron-builder",
+    "electron": "electron ."
+  },
+  "build": {
+    "appId": "com.witness.journal",
+    "productName": "Witness",
+    "forceCodeSigning": false,
+    "directories": {
+      "output": "dist-installer"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "python-backend/dist/witness-backend",
+        "to": "witness-backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Witness",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "license": "assets/LICENSE.txt",
+      "include": "installer.nsh",
+      "artifactName": "Witness-Setup-${version}.exe"
+    }
+  },
+  "dependencies": {
+    "@gsap/react": "^2.1.1",
+    "gsap": "^3.12.5",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "recharts": "^2.12.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.0",
+    "concurrently": "^8.2.0",
+    "cross-env": "^7.0.3",
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1",
+    "vite": "^8.0.10",
+    "wait-on": "^7.2.0"
+  },
+  "author": "Witness Contributors"
+}
