@@ -1,125 +1,150 @@
 # WITNESS
-### Private AI Journal. Runs entirely on your machine.
+### Private AI journal. Runs entirely on your machine.
 
 Witness records your voice, transcribes it locally, and uses a local AI to track your mood, stress, energy, and behavioral patterns over time. Nothing leaves your computer. No subscriptions. No cloud.
 
-![Witness Dashboard](assets/icon.ico)
+<!-- Add a screenshot here later: ![Witness Dashboard](assets/screenshot.png) -->
 
 ---
 
 ## What It Does
 
 - **Voice journal** — speak your entry, Witness transcribes it in real time
-- **AI analysis** — extracts mood, stress, energy, anxiety, clarity scores from what you say
+- **AI analysis** — extracts mood, stress, energy, anxiety, and clarity scores from what you say
 - **Behavioral flags** — surfaces honest patterns it notices across your entries
 - **Health overlay** — import Apple Health data to correlate HRV and sleep with your mood logs
 - **Weekly recap** — AI-generated summary of the week with pattern observations
-- **Full privacy** — all data stays on your machine in a local SQLite database
+- **Semantic search** — find past entries by meaning, not just keywords
+
+---
+
+## Who Built This
+
+I'm a high school student. I built Witness for myself because I wanted a journaling tool that was actually private and didn't try to sell me a subscription. I used Claude (Anthropic's AI) to help write most of the code. I designed it, tested it, broke it, fixed it, and use it daily on my own machine.
+
+This is not a startup. There's no team. Bug fixes will happen when I have time, which is not always. If something breaks and you know how to fix it, pull requests are welcome. If you open an issue I'll look at it but I can't promise a turnaround.
+
+The code is all here. Read it if you want.
 
 ---
 
 ## Requirements
 
-Before installing Witness, you need two things:
-
 ### 1. Ollama
-Ollama runs the AI model locally. Witness will install it automatically if it is not found.
+Ollama runs the AI model locally. Witness will try to launch it automatically.
 
-If you need to install it manually:
-1. Go to **https://ollama.com/download** and download the Windows installer
-2. Run it and follow the prompts
+If you need to install it manually, go to **https://ollama.com/download** and run the Windows installer.
 
-**You do not need to pull a model before launching.** Witness will guide you through choosing and downloading a model from the CONFIG screen on first launch.
+You do not need to pull a model before launching. Witness walks you through picking and downloading one from the CONFIG screen on first launch.
 
 ### 2. Hardware
-- **RAM:** 8GB minimum (enough for gemma4:3b, the default model)
-- **RAM:** 16GB+ recommended if you want to run larger models like deepseek-r1:14b
-- **Storage:** 5-15GB free depending on which model you choose
 - **OS:** Windows 10 or 11 (64-bit)
+- **RAM:** 8GB minimum (runs the default gemma4:3b model)
+- **RAM:** 16GB+ if you want deepseek-r1:14b, which gives noticeably better insights
+- **Storage:** 5-15GB free depending on which model you pick
 
-A GPU helps but is not required. All models run on CPU.
+A GPU helps with speed but is not required. Everything runs on CPU.
 
 ---
 
 ## Installation
 
 1. Download **Witness Setup 1.0.0.exe** from the [Releases](../../releases) page
-2. Run it — Windows may show a blue "Windows protected your PC" warning
-   - This appears because the app is not commercially code-signed (that costs money)
-   - Click **"More info"** then **"Run anyway"** to proceed
-   - The app is open source — you can read every line of code here
-3. Follow the installer prompts
+2. Run it. Windows will probably show a blue "Windows protected your PC" warning
+   - This happens because the app isn't commercially code-signed (that costs $hundreds/year)
+   - Click **"More info"** then **"Run anyway"**
+   - The full source code is sitting right here in this repo if you want to verify nothing sketchy is happening
+3. Follow the installer
 4. Launch Witness from the Start Menu or Desktop shortcut
 
-**First launch takes 30-60 seconds** while the AI model loads into memory. This is normal.
+First launch takes 30-60 seconds while the AI model loads. Normal.
 
 ---
 
 ## First Launch Checklist
 
 - [ ] Ollama is installed
-- [ ] You have selected and downloaded a model from the CONFIG screen
+- [ ] You picked and downloaded a model from the CONFIG screen
 - [ ] You have at least 8GB RAM
-- [ ] You see "OLLAMA ONLINE" in the sidebar after ~60 seconds
+- [ ] The sidebar shows "OLLAMA ONLINE" after about 60 seconds
 
-If the sidebar shows "OLLAMA OFFLINE" after 60 seconds, see Troubleshooting below.
+If the sidebar shows "OLLAMA OFFLINE" after a full minute, see Troubleshooting.
 
 ---
 
 ## Where Your Data Lives
 
-Your journal entries are stored at:
 ```
 C:\Users\<YourName>\AppData\Roaming\Witness\witness.db
 ```
 
-This location is intentional. Your data survives app updates and reinstalls. Uninstalling Witness does **not** delete your journal.
+Your journal is a single SQLite file at that path. It survives updates and reinstalls. Uninstalling Witness does not touch it. If you want a backup, copy that file somewhere.
 
-To back up your journal, copy that file somewhere safe.
+---
+
+## Privacy
+
+Your data goes nowhere. Physically cannot.
+
+I'm a high school student running a gaming PC in my room. There's no server on the other end, no company collecting anything, and no reason I'd want your journal entries even if I could get them. Witness talks to `localhost` only. The one exception: on your very first recording, Witness downloads the Whisper transcription model (about 150MB) from the internet. After that, everything runs offline permanently.
+
+No analytics. No telemetry. No account. No cloud. The database file is yours.
 
 ---
 
 ## Troubleshooting
 
 **"OLLAMA OFFLINE" in the sidebar**
-- Open a terminal and run `ollama serve` — if it errors, Ollama may not be installed correctly
-- Make sure you have downloaded a model from the CONFIG screen inside Witness
-- Try restarting the app after confirming Ollama is running
+- Open a terminal and run `ollama serve` to start it manually
+- Make sure you downloaded a model from the CONFIG screen
+- Restart the app
 
 **Blue SmartScreen warning on install**
-- This is expected for unsigned apps. Click "More info" then "Run anyway"
-- The source code is fully open — nothing is hidden
+- Expected. Click "More info" then "Run anyway". Source code is all here.
 
-**App is slow / AI responses take a long time**
-- The default model (gemma4:3b) works well on most hardware
-- If responses are slow, try a smaller model like llama3.2:3b in CONFIG
-- For the best quality insights, upgrade to deepseek-r1:14b in CONFIG if you have 16GB+ RAM
+**App is slow / AI takes forever**
+- gemma4:3b (the default) runs fine on most machines
+- For faster responses on older hardware, try llama3.2:3b in CONFIG
+- For better insight quality, upgrade to deepseek-r1:14b if you have 16GB+ RAM
 
-**Recording does not work**
-- Check that your microphone is not blocked in Windows Settings > Privacy > Microphone
-- Make sure no other app is exclusively holding the microphone
+**Microphone not working**
+- Windows Settings > Privacy > Microphone — make sure Witness has access
+- Check that no other app has exclusive hold on the mic
 
-**Whisper model not found / transcription fails**
-- On first recording, Witness downloads the Whisper transcription model (~150MB)
-- This requires an internet connection one time only
-- Subsequent recordings work fully offline
+**Transcription fails on first recording**
+- Witness is downloading the Whisper model (~150MB) — needs internet this one time
+- Wait for it to finish, then try again
 
 ---
 
 ## Changing the AI Model
 
-Witness defaults to `gemma4:3b` which runs on most computers with 8GB+ RAM.
+Witness defaults to `gemma4:3b`. From CONFIG you can browse and download other models. Witness shows which ones fit your hardware.
 
-From the CONFIG screen you can browse available models and download them with one click. Witness shows which models fit your hardware automatically.
-
-| Model | Size | RAM Needed | Quality |
+| Model | Size | RAM Needed | Notes |
 |---|---|---|---|
-| gemma4:3b | 3GB | 8GB | Good — recommended default |
-| llama3.2:3b | 2GB | 8GB | Fast, good for older hardware |
-| deepseek-r1:14b | 9GB | 16GB | Best — recommended if your hardware supports it |
-| deepseek-r1:32b | 20GB | 32GB | Maximum quality |
+| gemma4:3b | 3GB | 8GB | Default. Good for most machines |
+| llama3.2:3b | 2GB | 8GB | Faster, slightly less nuanced |
+| deepseek-r1:14b | 9GB | 16GB | Best quality. What I run |
+| deepseek-r1:32b | 20GB | 32GB | Maximum. Needs serious hardware |
 
-Go to **CONFIG** in the sidebar to switch models at any time.
+---
+
+## Running From Source
+
+If you want to run the code directly instead of using the installer:
+
+**You need:** Node.js 20+, Python 3.11 or 3.12, Ollama
+
+```
+git clone https://github.com/SpaseCases/Witness.git
+cd Witness
+npm install
+cd python-backend
+pip install -r requirements.txt
+cd ..
+npm run dev
+```
 
 ---
 
@@ -138,18 +163,19 @@ Go to **CONFIG** in the sidebar to switch models at any time.
 
 ---
 
-## Privacy
+## Roadmap
 
-- No analytics
-- No telemetry  
-- No network requests except to `localhost`
-- No account required
-- All data stored locally in SQLite
+Things I want to add. No timeline, no promises.
 
-The only outbound connection Witness makes is to download the Whisper transcription model on first use (~150MB, one time). After that, everything is offline.
+- **Mac support** — .dmg installer so Witness runs on MacOS
+- **iPhone companion app** — record entries from your phone over local WiFi, syncs to the desktop, no cloud involved
+- **Better health correlations** — deeper analysis connecting HRV and sleep to mood patterns
+- **Export** — get your full journal out as PDF or plain text
+
+Pull requests are open if you want to build any of these.
 
 ---
 
 ## License
 
-Personal use. See LICENSE.txt.
+MIT. See LICENSE.
