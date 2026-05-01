@@ -1,9 +1,14 @@
+<p align="center">
+  <img src="assets/icon.ico" width="80" alt="Witness" />
+</p>
+
 # WITNESS
 ### Private AI journal. Runs entirely on your machine.
 
 Witness records your voice, transcribes it locally, and uses a local AI to track your mood, stress, energy, and behavioral patterns over time. Nothing leaves your computer. No subscriptions. No cloud.
 
-<!-- Add a screenshot here later: ![Witness Dashboard](assets/screenshot.png) -->
+![Witness Dashboard](assets/screenshot-dashboard.png)
+![Witness Recording](assets/screenshot-record.png)
 
 ---
 
