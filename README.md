@@ -17,7 +17,7 @@ Witness records your voice, transcribes it locally, and uses a local AI to track
 - **Voice journal** — speak your entry, Witness transcribes it in real time
 - **AI analysis** — extracts mood, stress, energy, anxiety, and clarity scores from what you say
 - **Behavioral flags** — surfaces honest patterns it notices across your entries
-- **Health overlay** — import Apple Health data to correlate HRV and sleep with your mood logs
+- **Health correlation** — import Apple Health data and overlay HRV, sleep, and resting heart rate against your journal metrics on a dual-axis chart. The AI reads 30 days of paired data and writes a plain-English pattern summary — specific observations, no wellness-chatbot language
 - **Weekly recap** — AI-generated summary of the week with pattern observations
 - **Semantic search** — find past entries by meaning, not just keywords
 
@@ -77,6 +77,21 @@ If the sidebar shows "OLLAMA OFFLINE" after a full minute, see Troubleshooting.
 
 ---
 
+## Using the Health Correlation Feature
+
+1. On your iPhone: **Health → your profile photo → Export All Health Data**
+2. Transfer the `.zip` to your PC, unzip it
+3. In Witness, go to **VITALS → + IMPORT** and select the `export.xml` file
+4. Once imported, click the **CORRELATION** tab
+5. Toggle which journal metrics and health metrics you want to compare
+6. Click **RUN ANALYSIS** to get an AI-written pattern summary
+
+The chart shows journal scores (stress, mood, energy, anxiety) on the left axis and health data (HRV, sleep, resting heart rate) on the right axis. Lines only appear on days where both a journal entry and health data exist for the same date — you need some overlap before the chart populates.
+
+The AI analysis requires at least 7 days of overlapping data. It takes 30-60 seconds on deepseek-r1:14b. That's normal.
+
+---
+
 ## Where Your Data Lives
 
 ```
@@ -119,6 +134,15 @@ No analytics. No telemetry. No account. No cloud. The database file is yours.
 **Transcription fails on first recording**
 - Witness is downloading the Whisper model (~150MB) — needs internet this one time
 - Wait for it to finish, then try again
+
+**Correlation chart shows "NO PAIRED DATA"**
+- You need journal entries and Apple Health data on the same dates
+- Import your Apple Health export first, then check whether your journal entries overlap with those dates
+- Try a wider date range (60 days instead of 30)
+
+**Correlation AI analysis button is greyed out**
+- Need at least 7 days of overlapping data before the AI can find patterns
+- Record more entries or import a longer Apple Health export
 
 ---
 
@@ -174,7 +198,7 @@ Things I want to add. No timeline, no promises.
 
 - **Mac support** — .dmg installer so Witness runs on MacOS
 - **iPhone companion app** — record entries from your phone over local WiFi, syncs to the desktop, no cloud involved
-- **Better health correlations** — deeper analysis connecting HRV and sleep to mood patterns
+- **Deeper health correlations** — the dual-axis chart and AI analysis are live. Next is automatic pattern detection across longer windows without needing to manually trigger it
 - **Export** — get your full journal out as PDF or plain text
 
 Pull requests are open if you want to build any of these.
