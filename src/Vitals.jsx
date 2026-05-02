@@ -1,9 +1,8 @@
 /**
- * WITNESS — Vitals (Step 13 — revised)
- * Changes from original:
- *   1. Crosshair hover on all charts — vertical line, riding dot, floating tooltip
- *   2. Delete panel — date-range wipe + nuclear full-clear option
- *   3. Auto-upload status indicator (backend watches a folder + exposes POST endpoint)
+ * WITNESS — Vitals (Step 13 revised + Correlation feature)
+ * Changes from Step 13:
+ *   1. CORRELATION tab added — dual-axis SVG chart + AI analysis panel
+ *   2. Tab bar added at top of content area to switch between OVERVIEW and CORRELATION
  *
  * Save this file at: witness/src/Vitals.jsx
  */
@@ -43,7 +42,6 @@ function avg(arr) {
 }
 
 // ─── CROSSHAIR TOOLTIP ───────────────────────────────────────────────────────
-// Shared floating tooltip. Renders above the hovered x position.
 
 function CrosshairTooltip({ x, y, lines, visible }) {
   if (!visible) return null
@@ -107,19 +105,16 @@ function Sparkline({ data, dates, color = '#c38c32', height = 48, label = '', un
   const coords   = points.map(toCoord)
   const polyline = coords.map(c => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ')
 
-  // Find nearest data point to mouse x
   const handleMouseMove = (e) => {
     const rect = svgRef.current?.getBoundingClientRect()
     if (!rect) return
     const mouseX = e.clientX - rect.left
-    // map mouseX → data index
     const rawIdx = ((mouseX - pad) / (svgW - pad * 2)) * total
     const nearest = points.reduce((best, p) => {
       return Math.abs(p.i - rawIdx) < Math.abs(best.i - rawIdx) ? p : best
     }, points[0])
     setHoverIdx(nearest.i)
     const coord = toCoord(nearest)
-    // tooltip offset relative to container
     const containerRect = containerRef.current?.getBoundingClientRect()
     setTooltipPos({
       x: rect.left - containerRect.left + coord.x,
@@ -155,7 +150,6 @@ function Sparkline({ data, dates, color = '#c38c32', height = 48, label = '', un
           opacity={hoverIdx !== null ? 0.5 : 1}
         />
 
-        {/* Vertical crosshair */}
         {hoverCoord && (
           <line
             x1={hoverCoord.x.toFixed(1)} y1={pad}
@@ -167,7 +161,6 @@ function Sparkline({ data, dates, color = '#c38c32', height = 48, label = '', un
           />
         )}
 
-        {/* Riding dot — all points dim, hovered one bright */}
         {points.map(p => {
           const c = toCoord(p)
           const isHovered = p.i === hoverIdx
@@ -270,7 +263,6 @@ function SleepBars({ data }) {
           })
         })}
 
-        {/* Vertical crosshair line */}
         {hoverIdx !== null && (
           <line
             x1={`${(hoverIdx + 0.5) * barW}%`} y1={0}
@@ -402,7 +394,6 @@ function OverlayChart({ data }) {
           opacity={hoverIdx !== null ? 0.4 : 1}
         />
 
-        {/* Vertical crosshair */}
         {hoverHrvC && (
           <line
             x1={hoverHrvC.x.toFixed(1)} y1={pad.t}
@@ -413,12 +404,10 @@ function OverlayChart({ data }) {
           />
         )}
 
-        {/* HRV dot */}
         {hoverHrvC && (
           <circle cx={hoverHrvC.x.toFixed(1)} cy={hoverHrvC.y.toFixed(1)}
             r="4" fill="#50c8c8" />
         )}
-        {/* Stress dot */}
         {hoverStC && (
           <circle cx={hoverStC.x.toFixed(1)} cy={hoverStC.y.toFixed(1)}
             r="4" fill="#e05050" />
@@ -576,7 +565,7 @@ function ImportPanel({ onImported }) {
 // ─── DELETE PANEL ─────────────────────────────────────────────────────────────
 
 function DeletePanel({ summary, onDeleted }) {
-  const [mode,      setMode]      = useState(null)   // 'range' | 'all'
+  const [mode,      setMode]      = useState(null)
   const [dateFrom,  setDateFrom]  = useState('')
   const [dateTo,    setDateTo]    = useState('')
   const [confirming, setConfirming] = useState(false)
@@ -715,8 +704,6 @@ function DeletePanel({ summary, onDeleted }) {
 }
 
 // ─── AUTO-UPLOAD STATUS ───────────────────────────────────────────────────────
-// Shows the status of the watch-folder and network endpoint.
-// The backend checks the watch folder on startup and exposes POST /health/auto-import.
 
 function AutoUploadInfo({ autoStatus }) {
   return (
@@ -762,6 +749,537 @@ function AutoUploadInfo({ autoStatus }) {
   )
 }
 
+// ─── CORRELATION: DUAL-AXIS SVG CHART ────────────────────────────────────────
+// Left Y-axis: journal metrics (scale 1-10)
+// Right Y-axis: health metrics (auto-scaled to data range)
+
+const METRIC_COLORS = {
+  stress:           '#e05050',
+  mood:             '#f5a830',
+  energy:           '#50a870',
+  anxiety:          '#a070f0',
+  hrv:              '#5090f0',
+  sleep_total_mins: '#70c0d0',
+  sleep_deep_mins:  '#3070a0',
+  resting_hr:       '#f07050',
+}
+
+const METRIC_LABELS = {
+  stress:           'STRESS',
+  mood:             'MOOD',
+  energy:           'ENERGY',
+  anxiety:          'ANXIETY',
+  hrv:              'HRV',
+  sleep_total_mins: 'SLEEP TOTAL',
+  sleep_deep_mins:  'SLEEP DEEP',
+  resting_hr:       'RESTING HR',
+}
+
+const METRIC_UNITS = {
+  hrv:              ' ms',
+  sleep_total_mins: ' min',
+  sleep_deep_mins:  ' min',
+  resting_hr:       ' bpm',
+}
+
+function CorrelationChart({ data, journalMetrics, healthMetrics }) {
+  const containerRef = useRef(null)
+  const svgRef       = useRef(null)
+  const [svgW, setSvgW]         = useState(600)
+  const [hoverIdx, setHoverIdx] = useState(null)
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 })
+
+  useEffect(() => {
+    if (!svgRef.current) return
+    const ro = new ResizeObserver(e => setSvgW(e[0].contentRect.width))
+    ro.observe(svgRef.current)
+    return () => ro.disconnect()
+  }, [])
+
+  if (!data || data.length === 0) {
+    return (
+      <div className="vt-corr-empty">
+        <div className="vt-corr-empty-title">NO PAIRED DATA FOR THIS RANGE</div>
+        <div className="vt-corr-empty-sub">
+          Journal entries and health data must overlap on the same dates.
+          Record more voice entries or import more Apple Health data.
+        </div>
+      </div>
+    )
+  }
+
+  const height = 260
+  const pad    = { t: 16, r: 52, b: 28, l: 52 }
+  const innerW = svgW - pad.l - pad.r
+  const innerH = height - pad.t - pad.b
+  const total  = data.length - 1
+
+  // Journal metrics: fixed 1-10 scale on left axis
+  const jMin = 0, jMax = 10, jRange = 10
+
+  // Health metrics: auto-scale each to its own range, but share the right axis
+  // We normalize all health metrics to 0-1 then scale to the chart height
+  const healthRanges = {}
+  for (const m of healthMetrics) {
+    const vals = data.map(d => d[m]).filter(v => v != null)
+    if (vals.length) {
+      const min = Math.min(...vals)
+      const max = Math.max(...vals)
+      healthRanges[m] = { min, max, range: max - min || 1 }
+    }
+  }
+
+  const xFor = (i) => pad.l + (total === 0 ? innerW / 2 : (i / total) * innerW)
+
+  const yForJournal = (v) => pad.t + innerH - ((v - jMin) / jRange) * innerH
+
+  const yForHealth = (m, v) => {
+    if (!healthRanges[m]) return pad.t + innerH / 2
+    const { min, range } = healthRanges[m]
+    return pad.t + innerH - ((v - min) / range) * innerH
+  }
+
+  // Build polyline paths, breaking on null values
+  const buildPath = (metric, yFn) => {
+    const segments = []
+    let current = []
+    for (let i = 0; i < data.length; i++) {
+      const v = data[i][metric]
+      if (v != null) {
+        current.push(`${xFor(i).toFixed(1)},${yFn(metric, v).toFixed(1)}`)
+      } else {
+        if (current.length > 1) segments.push(current.join(' '))
+        current = []
+      }
+    }
+    if (current.length > 1) segments.push(current.join(' '))
+    return segments
+  }
+
+  // Date labels: show up to 6 evenly spaced
+  const labelCount  = Math.min(6, data.length)
+  const labelStep   = Math.max(1, Math.floor(data.length / labelCount))
+  const labelIdxs   = []
+  for (let i = 0; i < data.length; i += labelStep) labelIdxs.push(i)
+  if (labelIdxs[labelIdxs.length - 1] !== data.length - 1) {
+    labelIdxs.push(data.length - 1)
+  }
+
+  const handleMouseMove = (e) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const mouseX = e.clientX - rect.left - pad.l
+    const rawIdx = (mouseX / innerW) * total
+    const idx = Math.min(total, Math.max(0, Math.round(rawIdx)))
+    setHoverIdx(idx)
+    const containerRect = containerRef.current?.getBoundingClientRect()
+    setTooltipPos({
+      x: rect.left - containerRect.left + xFor(idx),
+      y: rect.top  - containerRect.top  + pad.t
+    })
+  }
+
+  const hd = hoverIdx !== null ? data[hoverIdx] : null
+
+  // Y-axis ticks for journal (left) — 0, 2, 4, 6, 8, 10
+  const jTicks = [0, 2, 4, 6, 8, 10]
+
+  // Right axis label: first active health metric's range
+  const firstHealth = healthMetrics.find(m => healthRanges[m])
+  const hRange = firstHealth ? healthRanges[firstHealth] : null
+
+  return (
+    <div ref={containerRef} className="vt-sparkline-wrap" onMouseLeave={() => setHoverIdx(null)}>
+      <svg
+        ref={svgRef}
+        width="100%"
+        height={height}
+        className="vt-corr-svg"
+        onMouseMove={handleMouseMove}
+        style={{ cursor: 'crosshair' }}
+      >
+        {/* Grid lines */}
+        {jTicks.map(t => (
+          <line
+            key={t}
+            x1={pad.l} y1={yForJournal(t).toFixed(1)}
+            x2={pad.l + innerW} y2={yForJournal(t).toFixed(1)}
+            stroke="rgba(255,255,255,0.04)"
+            strokeWidth="1"
+          />
+        ))}
+
+        {/* Left Y-axis ticks + labels */}
+        {jTicks.map(t => (
+          <text
+            key={t}
+            x={(pad.l - 6).toFixed(1)}
+            y={(yForJournal(t) + 3).toFixed(1)}
+            textAnchor="end"
+            fontSize="7"
+            fill="rgba(255,255,255,0.2)"
+            fontFamily="IBM Plex Mono"
+          >
+            {t}
+          </text>
+        ))}
+
+        {/* Left Y-axis label */}
+        <text
+          x="8"
+          y={(pad.t + innerH / 2).toFixed(1)}
+          textAnchor="middle"
+          fontSize="7"
+          fill="rgba(255,255,255,0.2)"
+          fontFamily="IBM Plex Mono"
+          transform={`rotate(-90, 8, ${pad.t + innerH / 2})`}
+        >
+          JOURNAL (1-10)
+        </text>
+
+        {/* Right Y-axis label */}
+        <text
+          x={(svgW - 8).toFixed(1)}
+          y={(pad.t + innerH / 2).toFixed(1)}
+          textAnchor="middle"
+          fontSize="7"
+          fill="rgba(255,255,255,0.2)"
+          fontFamily="IBM Plex Mono"
+          transform={`rotate(90, ${svgW - 8}, ${pad.t + innerH / 2})`}
+        >
+          HEALTH
+        </text>
+
+        {/* Journal metric lines */}
+        {journalMetrics.map(m => {
+          const segs = buildPath(m, (_, v) => yForJournal(v))
+          return segs.map((pts, si) => (
+            <polyline
+              key={`${m}-${si}`}
+              points={pts}
+              fill="none"
+              stroke={METRIC_COLORS[m]}
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              opacity={hoverIdx !== null ? 0.35 : 0.9}
+            />
+          ))
+        })}
+
+        {/* Health metric lines */}
+        {healthMetrics.map(m => {
+          if (!healthRanges[m]) return null
+          const segs = buildPath(m, yForHealth)
+          return segs.map((pts, si) => (
+            <polyline
+              key={`${m}-${si}`}
+              points={pts}
+              fill="none"
+              stroke={METRIC_COLORS[m]}
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              strokeDasharray="5 2"
+              opacity={hoverIdx !== null ? 0.35 : 0.9}
+            />
+          ))
+        })}
+
+        {/* Crosshair */}
+        {hoverIdx !== null && (
+          <line
+            x1={xFor(hoverIdx).toFixed(1)} y1={pad.t}
+            x2={xFor(hoverIdx).toFixed(1)} y2={pad.t + innerH}
+            stroke="rgba(255,255,255,0.15)"
+            strokeWidth="1"
+            strokeDasharray="3 2"
+          />
+        )}
+
+        {/* Hover dots on each active metric */}
+        {hoverIdx !== null && hd && journalMetrics.map(m => {
+          const v = hd[m]
+          if (v == null) return null
+          return (
+            <circle
+              key={m}
+              cx={xFor(hoverIdx).toFixed(1)}
+              cy={yForJournal(v).toFixed(1)}
+              r="4"
+              fill={METRIC_COLORS[m]}
+            />
+          )
+        })}
+        {hoverIdx !== null && hd && healthMetrics.map(m => {
+          const v = hd[m]
+          if (v == null || !healthRanges[m]) return null
+          return (
+            <circle
+              key={m}
+              cx={xFor(hoverIdx).toFixed(1)}
+              cy={yForHealth(m, v).toFixed(1)}
+              r="4"
+              fill={METRIC_COLORS[m]}
+            />
+          )
+        })}
+
+        {/* X-axis date labels */}
+        {labelIdxs.map(idx => (
+          <text
+            key={idx}
+            x={xFor(idx).toFixed(1)}
+            y={height - 4}
+            textAnchor="middle"
+            fontSize="7"
+            fill="rgba(255,255,255,0.18)"
+            fontFamily="IBM Plex Mono"
+          >
+            {fmtDate(data[idx].date)}
+          </text>
+        ))}
+      </svg>
+
+      {/* Crosshair tooltip */}
+      {hd && (
+        <CrosshairTooltip
+          x={tooltipPos.x}
+          y={tooltipPos.y}
+          visible={true}
+          lines={[
+            { label: fmtDateFull(hd.date), value: '', color: 'rgba(255,255,255,0.3)', dot: false },
+            ...journalMetrics.map(m => ({
+              label: METRIC_LABELS[m],
+              value: hd[m] != null ? `${hd[m].toFixed(1)} / 10` : '—',
+              color: METRIC_COLORS[m],
+              dot: true,
+            })),
+            ...healthMetrics.map(m => ({
+              label: METRIC_LABELS[m],
+              value: hd[m] != null ? `${hd[m].toFixed(1)}${METRIC_UNITS[m] || ''}` : '—',
+              color: METRIC_COLORS[m],
+              dot: true,
+            })),
+          ]}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── CORRELATION TAB ─────────────────────────────────────────────────────────
+
+const JOURNAL_TOGGLES = ['stress', 'mood', 'energy', 'anxiety']
+const HEALTH_TOGGLES  = ['hrv', 'sleep_total_mins', 'sleep_deep_mins', 'resting_hr']
+
+function CorrelationTab() {
+  const [selectedDays,   setSelectedDays]   = useState(30)
+  const [journalMetrics, setJournalMetrics] = useState(['stress'])
+  const [healthMetrics,  setHealthMetrics]  = useState(['hrv', 'sleep_total_mins'])
+  const [data,           setData]           = useState([])
+  const [loading,        setLoading]        = useState(true)
+  const [analysis,       setAnalysis]       = useState(null)
+  const [analyzing,      setAnalyzing]      = useState(false)
+  const [analysisError,  setAnalysisError]  = useState(null)
+
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`${API}/health/correlation?days=${selectedDays}`)
+      if (res.ok) {
+        setData(await res.json())
+      } else {
+        setData([])
+      }
+    } catch {
+      setData([])
+    } finally {
+      setLoading(false)
+    }
+  }, [selectedDays])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  // Reset analysis when days changes — stale analysis for a different range is confusing
+  useEffect(() => { setAnalysis(null); setAnalysisError(null) }, [selectedDays])
+
+  const toggleJournal = (m) => {
+    setJournalMetrics(prev =>
+      prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]
+    )
+  }
+
+  const toggleHealth = (m) => {
+    setHealthMetrics(prev =>
+      prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]
+    )
+  }
+
+  const runAnalysis = async () => {
+    setAnalyzing(true)
+    setAnalysisError(null)
+    try {
+      const res  = await fetch(`${API}/health/correlation/analyze`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ days: selectedDays }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.detail || 'Analysis failed')
+      if (json.error === 'not_enough_data') {
+        setAnalysisError('not_enough_data')
+        setAnalysis(null)
+      } else {
+        setAnalysis(json)
+        setAnalysisError(null)
+      }
+    } catch (e) {
+      setAnalysisError('error')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  const DAYS_OPTS = [7, 14, 30, 60]
+
+  return (
+    <div className="vt-corr-tab">
+
+      {/* Controls row */}
+      <div className="vt-corr-controls">
+        {/* Date range */}
+        <div className="vt-corr-range">
+          {DAYS_OPTS.map(d => (
+            <button
+              key={d}
+              className={`vt-corr-range-btn ${selectedDays === d ? 'active' : ''}`}
+              onClick={() => setSelectedDays(d)}
+            >
+              {d === 7 ? 'LAST 7 DAYS' : d === 14 ? '14 DAYS' : d === 30 ? '30 DAYS' : '60 DAYS'}
+            </button>
+          ))}
+        </div>
+
+        {/* Metric toggles */}
+        <div className="vt-corr-toggles">
+          <div className="vt-corr-toggle-group">
+            <span className="vt-corr-group-label">JOURNAL</span>
+            <div className="vt-corr-toggle-row">
+              {JOURNAL_TOGGLES.map(m => (
+                <button
+                  key={m}
+                  className={`vt-corr-toggle ${journalMetrics.includes(m) ? 'active' : ''}`}
+                  style={journalMetrics.includes(m) ? {
+                    borderColor: METRIC_COLORS[m],
+                    color: METRIC_COLORS[m],
+                  } : {}}
+                  onClick={() => toggleJournal(m)}
+                >
+                  {METRIC_LABELS[m]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="vt-corr-toggle-group">
+            <span className="vt-corr-group-label">HEALTH</span>
+            <div className="vt-corr-toggle-row">
+              {HEALTH_TOGGLES.map(m => (
+                <button
+                  key={m}
+                  className={`vt-corr-toggle ${healthMetrics.includes(m) ? 'active' : ''}`}
+                  style={healthMetrics.includes(m) ? {
+                    borderColor: METRIC_COLORS[m],
+                    color: METRIC_COLORS[m],
+                  } : {}}
+                  onClick={() => toggleHealth(m)}
+                >
+                  {METRIC_LABELS[m]}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Legend */}
+      {(journalMetrics.length > 0 || healthMetrics.length > 0) && (
+        <div className="vt-corr-legend">
+          <span className="vt-corr-legend-hint">SOLID = JOURNAL (1-10 SCALE) · DASHED = HEALTH (RAW VALUES)</span>
+          {[...journalMetrics, ...healthMetrics].map(m => (
+            <span key={m} className="vt-corr-legend-item">
+              <span className="vt-corr-legend-dot" style={{ background: METRIC_COLORS[m] }} />
+              {METRIC_LABELS[m]}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Chart */}
+      <div className="vt-corr-chart-wrap">
+        {loading ? (
+          <div className="vt-corr-loading">
+            <div className="vt-spinner" /> LOADING...
+          </div>
+        ) : (
+          <CorrelationChart
+            data={data}
+            journalMetrics={journalMetrics}
+            healthMetrics={healthMetrics}
+          />
+        )}
+      </div>
+
+      {/* AI Analysis panel */}
+      <div className="vt-corr-analysis">
+        <div className="vt-corr-analysis-header">
+          <span className="vt-corr-analysis-title">PATTERN ANALYSIS</span>
+          <button
+            className="vt-corr-analyze-btn"
+            onClick={runAnalysis}
+            disabled={analyzing || loading || data.length < 7}
+            title={data.length < 7 ? 'Need at least 7 days of overlapping data' : ''}
+          >
+            {analyzing ? 'ANALYZING...' : 'RUN ANALYSIS'}
+          </button>
+        </div>
+
+        <div className="vt-corr-analysis-body">
+          {analyzing ? (
+            <div className="vt-corr-analysis-loading">
+              <div className="vt-spinner" />
+              <span>AI IS READING THE DATA — THIS MAY TAKE 30-60 SECONDS</span>
+            </div>
+          ) : analysisError === 'not_enough_data' ? (
+            <div className="vt-corr-analysis-notice">
+              NOT ENOUGH PAIRED DATA — Need at least 7 days where journal entries
+              and health data overlap on the same dates.
+            </div>
+          ) : analysisError === 'error' ? (
+            <div className="vt-corr-analysis-notice" style={{ color: '#e05050' }}>
+              ANALYSIS FAILED — Is the Python backend running? Check the terminal for errors.
+            </div>
+          ) : analysis ? (
+            <div className="vt-corr-analysis-result">
+              <p className="vt-corr-analysis-text">{analysis.analysis}</p>
+              <div className="vt-corr-analysis-meta">
+                ANALYZED {analysis.days_analyzed} DAYS
+                {analysis.generated_at && ` — ${new Date(analysis.generated_at).toLocaleString('en-US', {
+                  month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+                }).toUpperCase()}`}
+              </div>
+            </div>
+          ) : (
+            <div className="vt-corr-analysis-empty">
+              RUN ANALYSIS TO SEE PATTERNS
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 
 export default function Vitals() {
@@ -774,6 +1292,7 @@ export default function Vitals() {
   const [showImport,  setShowImport]  = useState(false)
   const [showDelete,  setShowDelete]  = useState(false)
   const [showAuto,    setShowAuto]    = useState(false)
+  const [activeTab,   setActiveTab]   = useState('overview')  // 'overview' | 'correlation'
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -825,7 +1344,7 @@ export default function Vitals() {
           </span>
         </div>
         <div className="vt-header-right">
-          {hasData && (
+          {hasData && activeTab === 'overview' && (
             <div className="vt-days-selector">
               {DAYS_OPT.map(d => (
                 <button key={d}
@@ -860,7 +1379,7 @@ export default function Vitals() {
         </div>
       </div>
 
-      {/* Panels — only one shows at a time */}
+      {/* Panels */}
       {showImport && (
         <ImportPanel onImported={() => { setShowImport(false); load() }} />
       )}
@@ -872,6 +1391,24 @@ export default function Vitals() {
       )}
       {showAuto && (
         <AutoUploadInfo autoStatus={autoStatus} />
+      )}
+
+      {/* Tab bar — only show when there's data */}
+      {hasData && (
+        <div className="vt-tab-bar">
+          <button
+            className={`vt-tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
+            onClick={() => setActiveTab('overview')}
+          >
+            OVERVIEW
+          </button>
+          <button
+            className={`vt-tab-btn ${activeTab === 'correlation' ? 'active' : ''}`}
+            onClick={() => setActiveTab('correlation')}
+          >
+            CORRELATION
+          </button>
+        </div>
       )}
 
       {/* Content */}
@@ -886,7 +1423,7 @@ export default function Vitals() {
             <div className="vt-empty-title">NO HEALTH DATA</div>
             <div className="vt-empty-sub">
               Import your Apple Health export to unlock HRV tracking, sleep
-              analysis, and the HRV vs Stress correlation chart.
+              analysis, and the correlation chart.
             </div>
             <div className="vt-empty-sub">
               On your iPhone: Health → your profile photo → Export All Health Data.
@@ -897,6 +1434,8 @@ export default function Vitals() {
               IMPORT APPLE HEALTH
             </button>
           </div>
+        ) : activeTab === 'correlation' ? (
+          <CorrelationTab />
         ) : (
           <>
             <div className="vt-stats-row">

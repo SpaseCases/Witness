@@ -227,6 +227,37 @@
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ── Tab bar ─────────────────────────────────────────────────────────────── */
+
+.vt-tab-bar {
+  display: flex;
+  border-bottom: 1px solid #2a2a2a;
+  flex-shrink: 0;
+  padding: 0 28px;
+}
+
+.vt-tab-btn {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  padding: 0.65rem 1.2rem;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: rgba(255,255,255,0.25);
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-bottom: -1px;
+}
+
+.vt-tab-btn:hover { color: rgba(255,255,255,0.55); }
+
+.vt-tab-btn.active {
+  color: #f5a830;
+  border-bottom-color: #f5a830;
+}
+
 /* ── Content scroll area ─────────────────────────────────────────────────── */
 
 .vt-content {
@@ -571,7 +602,6 @@
 
 .vt-date-input:focus { border-color: rgba(245,168,48,0.5); }
 
-/* Invert the browser's native calendar icon to match dark theme */
 .vt-date-input::-webkit-calendar-picker-indicator {
   filter: invert(0.4);
   cursor: pointer;
@@ -584,7 +614,6 @@
   justify-content: flex-end;
 }
 
-/* Confirm button (mid-step — not yet destructive red) */
 .vt-delete-confirm-btn {
   font-family: var(--font-mono);
   font-size: 0.65rem;
@@ -605,7 +634,6 @@
 
 .vt-delete-confirm-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-/* Final destructive button — full red */
 .vt-delete-final-btn {
   font-family: var(--font-mono);
   font-size: 0.65rem;
@@ -638,8 +666,6 @@
   border: 1px solid rgba(224,80,80,0.2);
   background: rgba(224,80,80,0.06);
 }
-
-/* Result row after delete completes */
 
 .vt-delete-result {
   display: flex;
@@ -752,4 +778,304 @@
   line-height: 1.7;
   border-top: 1px solid rgba(255,255,255,0.05);
   padding-top: 0.6rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CORRELATION TAB
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.vt-corr-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  animation: vt-fadein 0.25s ease-out both;
+}
+
+/* ── Controls row ─────────────────────────────────────────────────────────── */
+
+.vt-corr-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+/* Date range buttons */
+
+.vt-corr-range {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid #2a2a2a;
+  padding-bottom: 0.85rem;
+}
+
+.vt-corr-range-btn {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 0.3rem 0.85rem;
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,0.22);
+  cursor: pointer;
+  transition: color 0.15s;
+  position: relative;
+}
+
+.vt-corr-range-btn::after {
+  content: '';
+  position: absolute;
+  bottom: -0.85rem;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #f5a830;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.vt-corr-range-btn:hover { color: rgba(255,255,255,0.5); }
+
+.vt-corr-range-btn.active {
+  color: #f5a830;
+}
+.vt-corr-range-btn.active::after { opacity: 1; }
+
+/* Metric toggle groups */
+
+.vt-corr-toggles {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.vt-corr-toggle-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.vt-corr-group-label {
+  font-family: var(--font-display);
+  font-size: 0.9rem;
+  letter-spacing: 3px;
+  color: #f5a830;
+}
+
+.vt-corr-toggle-row {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.vt-corr-toggle {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 0.3rem 0.7rem;
+  background: #202020;
+  border: 1px solid #2a2a2a;
+  color: rgba(255,255,255,0.25);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.vt-corr-toggle:hover {
+  color: rgba(255,255,255,0.5);
+  border-color: #3a3a3a;
+}
+
+/* Active state uses inline style for color from JS */
+
+/* ── Legend ───────────────────────────────────────────────────────────────── */
+
+.vt-corr-legend {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.vt-corr-legend-hint {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.08em;
+  color: rgba(255,255,255,0.18);
+  margin-right: 0.5rem;
+}
+
+.vt-corr-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.35);
+}
+
+.vt-corr-legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Chart area ───────────────────────────────────────────────────────────── */
+
+.vt-corr-chart-wrap {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  padding: 0.75rem 0.5rem 0.5rem;
+  min-height: 290px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.vt-corr-svg { display: block; }
+
+.vt-corr-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.25);
+  padding: 2rem;
+}
+
+/* Empty state for chart */
+
+.vt-corr-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+}
+
+.vt-corr-empty-title {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  letter-spacing: 4px;
+  color: rgba(255,255,255,0.15);
+}
+
+.vt-corr-empty-sub {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: rgba(255,255,255,0.2);
+  line-height: 1.8;
+  max-width: 440px;
+  letter-spacing: 0.04em;
+}
+
+/* ── AI Analysis panel ────────────────────────────────────────────────────── */
+
+.vt-corr-analysis {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  display: flex;
+  flex-direction: column;
+}
+
+.vt-corr-analysis-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.vt-corr-analysis-title {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  letter-spacing: 3px;
+  color: #f0e8dc;
+}
+
+.vt-corr-analyze-btn {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 0.4rem 1rem;
+  border: 1px solid rgba(245,168,48,0.45);
+  background: rgba(245,168,48,0.07);
+  color: #f5a830;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.vt-corr-analyze-btn:hover:not(:disabled) {
+  background: rgba(245,168,48,0.18);
+  border-color: #f5a830;
+}
+
+.vt-corr-analyze-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.vt-corr-analysis-body {
+  padding: 1.1rem 1.25rem;
+  min-height: 80px;
+  display: flex;
+  align-items: flex-start;
+}
+
+.vt-corr-analysis-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.3);
+}
+
+.vt-corr-analysis-empty {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  color: rgba(255,255,255,0.18);
+  margin: auto;
+}
+
+.vt-corr-analysis-notice {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  color: rgba(255,255,255,0.3);
+  line-height: 1.8;
+}
+
+.vt-corr-analysis-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  animation: vt-fadein 0.4s ease-out both;
+}
+
+.vt-corr-analysis-text {
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  color: #a09080;
+  line-height: 1.85;
+  margin: 0;
+}
+
+.vt-corr-analysis-meta {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.18);
+  border-top: 1px solid rgba(255,255,255,0.05);
+  padding-top: 0.5rem;
 }
