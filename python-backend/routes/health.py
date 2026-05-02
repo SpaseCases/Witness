@@ -1,5 +1,5 @@
 """
-WITNESS — Health Data API  (Step 13 revised)
+WITNESS — Health Data API  (Step 13 revised + Correlation feature)
 Parses Apple Health XML exports with iterparse (memory-safe for 100MB+ files)
 and stores metrics locally in SQLite.
 
@@ -10,6 +10,10 @@ New in this revision:
   POST   /health/auto-import    — network endpoint for iOS Shortcut / phone push
          On startup the backend also checks the health-inbox folder and
          auto-imports any export.xml found there, then moves it to processed/.
+
+  GET    /health/correlation?days=N         — joined journal+health rows for chart
+  GET    /health/correlation/summary?days=N — quick stats for empty-state check
+  POST   /health/correlation/analyze        — AI pattern analysis of paired data
 
 Endpoints:
   POST   /health/import          — manual upload + parse export.xml
@@ -32,6 +36,7 @@ from typing import Optional
 from collections import defaultdict
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from pydantic import BaseModel
 from database import get_conn
 
 log    = logging.getLogger("witness.health")
@@ -590,3 +595,190 @@ def delete_all_health():
         return {"deleted": deleted}
     finally:
         conn.close()
+
+
+# ─── CORRELATION ENDPOINTS ────────────────────────────────────────────────────
+# These join journal metrics (from the metrics table) with health data
+# on the same dates. The metrics table is populated by the AI after each
+# voice entry via POST /transcribe/extract-metrics.
+
+@router.get("/correlation")
+def get_correlation_data(days: int = 30):
+    """
+    Join journal metrics and health data on date.
+    Returns rows where BOTH a metrics entry AND health data exist for the same date.
+
+    The metrics table stores entry_id linking to journal_entries.
+    journal_entries stores date as a full ISO timestamp (e.g. 2024-01-15T22:30:00).
+    health_data stores date as YYYY-MM-DD only.
+    We normalize with DATE() to handle the mismatch.
+
+    Returns array of: { date, stress, mood, anxiety, energy,
+                        hrv, resting_hr, sleep_total_mins,
+                        sleep_deep_mins, sleep_rem_mins }
+    Ordered by date ASC. Null values included — not every day has every metric.
+    """
+    days = min(max(days, 1), 90)  # clamp: 1-90
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT
+                hd.date                         AS date,
+                m.stress                        AS stress,
+                m.mood                          AS mood,
+                m.anxiety                       AS anxiety,
+                m.energy                        AS energy,
+                hd.hrv                          AS hrv,
+                hd.resting_hr                   AS resting_hr,
+                hd.sleep_total_mins             AS sleep_total_mins,
+                hd.sleep_deep_mins              AS sleep_deep_mins,
+                hd.sleep_rem_mins               AS sleep_rem_mins
+            FROM health_data hd
+            INNER JOIN metrics m
+                ON hd.date = DATE(
+                    (SELECT je.date FROM entries je WHERE je.id = m.entry_id)
+                )
+            WHERE hd.date >= date('now', ?)
+            ORDER BY hd.date ASC
+        """, (f"-{days} days",)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.get("/correlation/summary")
+def get_correlation_summary(days: int = 30):
+    """
+    Quick summary for the frontend to decide whether to show the chart
+    or the empty state. Returns row_count, date_from, date_to, and averages.
+    """
+    days = min(max(days, 1), 90)
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT
+                hd.date             AS date,
+                m.stress            AS stress,
+                hd.hrv              AS hrv,
+                hd.sleep_total_mins AS sleep_total_mins
+            FROM health_data hd
+            INNER JOIN metrics m
+                ON hd.date = DATE(
+                    (SELECT je.date FROM entries je WHERE je.id = m.entry_id)
+                )
+            WHERE hd.date >= date('now', ?)
+            ORDER BY hd.date ASC
+        """, (f"-{days} days",)).fetchall()
+
+        if not rows:
+            return {
+                "row_count":        0,
+                "date_from":        None,
+                "date_to":          None,
+                "avg_stress":       None,
+                "avg_hrv":          None,
+                "avg_sleep_hours":  None,
+            }
+
+        dates       = [r["date"]             for r in rows]
+        stresses    = [r["stress"]            for r in rows if r["stress"]            is not None]
+        hrvs        = [r["hrv"]               for r in rows if r["hrv"]               is not None]
+        sleeps      = [r["sleep_total_mins"]  for r in rows if r["sleep_total_mins"]  is not None]
+
+        def _avg(lst):
+            return round(sum(lst) / len(lst), 2) if lst else None
+
+        return {
+            "row_count":       len(rows),
+            "date_from":       dates[0],
+            "date_to":         dates[-1],
+            "avg_stress":      _avg(stresses),
+            "avg_hrv":         _avg(hrvs),
+            "avg_sleep_hours": round(_avg(sleeps) / 60, 2) if _avg(sleeps) else None,
+        }
+    finally:
+        conn.close()
+
+
+class CorrelationAnalyzeRequest(BaseModel):
+    days: int = 30
+
+
+@router.post("/correlation/analyze")
+async def analyze_correlation(body: CorrelationAnalyzeRequest):
+    """
+    Fetch paired journal+health data, format it as a compact table,
+    send it to the local AI model, and return a plain-English pattern summary.
+
+    Requires at least 7 days of overlapping data.
+    Returns: { analysis, days_analyzed, generated_at }
+    """
+    from ollama_manager import generate
+
+    days = min(max(body.days, 1), 90)
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT
+                hd.date                         AS date,
+                m.stress                        AS stress,
+                hd.hrv                          AS hrv,
+                hd.sleep_total_mins             AS sleep_total_mins
+            FROM health_data hd
+            INNER JOIN metrics m
+                ON hd.date = DATE(
+                    (SELECT je.date FROM entries je WHERE je.id = m.entry_id)
+                )
+            WHERE hd.date >= date('now', ?)
+            ORDER BY hd.date ASC
+        """, (f"-{days} days",)).fetchall()
+    finally:
+        conn.close()
+
+    if len(rows) < 7:
+        return {
+            "analysis":      None,
+            "error":         "not_enough_data",
+            "days_analyzed": len(rows),
+        }
+
+    # Build a compact text table for the AI
+    lines = ["DATE       | STRESS | HRV (ms) | SLEEP (hrs)", "-" * 46]
+    for r in rows:
+        stress_str = f"{r['stress']:.1f}" if r["stress"] is not None else "null"
+        hrv_str    = f"{r['hrv']:.1f}"    if r["hrv"]    is not None else "null"
+        if r["sleep_total_mins"] is not None:
+            sleep_str = f"{r['sleep_total_mins'] / 60:.1f}"
+        else:
+            sleep_str = "null"
+        lines.append(f"{r['date']} | {stress_str:>6} | {hrv_str:>8} | {sleep_str:>10}")
+
+    data_table = "\n".join(lines)
+
+    prompt = (
+        "You are analyzing personal journal and health data. "
+        "The data below shows daily stress score (1-10, higher = more stressed), "
+        "HRV in milliseconds (higher = better recovery), "
+        "and total sleep in hours. "
+        "Identify 2-3 honest, specific patterns you notice. "
+        "Cite the actual dates or date ranges where you see the pattern. "
+        "Do not give advice. Do not soften observations. Do not use em dashes. "
+        "Write in plain sentences. Maximum 150 words.\n\n"
+        f"DATA:\n{data_table}"
+    )
+
+    try:
+        raw = await generate(prompt=prompt, temperature=0.4, max_tokens=400)
+
+        # Strip DeepSeek / other model think tags
+        import re
+        clean = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+        return {
+            "analysis":      clean,
+            "days_analyzed": len(rows),
+            "generated_at":  datetime.now().isoformat(),
+        }
+    except Exception as e:
+        log.error(f"Correlation analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
