@@ -1,0 +1,276 @@
+/* ══════════════════════════════════════════════════════════════════════
+   WITNESS — Export Screen Styles  (Step 5)
+   Save at: witness/src/styles/export.css
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ─── PAGE SHELL ─────────────────────────────────────────────────────── */
+
+.export-page {
+  padding: 28px 32px;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  height: 100%;
+}
+
+/* ─── CARD ────────────────────────────────────────────────────────────── */
+
+.export-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-dim);
+  border-top: 2px solid var(--accent);
+  padding: 28px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* ─── SECTIONS ────────────────────────────────────────────────────────── */
+
+.export-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.export-section + .export-section {
+  border-top: 1px solid var(--border-dim);
+  padding-top: 24px;
+}
+
+.export-section-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2.5px;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+/* ─── FORMAT TOGGLE ───────────────────────────────────────────────────── */
+
+.export-toggle-row {
+  display: flex;
+  gap: 10px;
+}
+
+.export-toggle-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-dim);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.export-toggle-btn:hover {
+  border-color: var(--border-bright);
+  background: var(--bg-hover);
+}
+
+.export-toggle-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.export-toggle-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.export-toggle-btn.active .export-toggle-label {
+  color: var(--accent-bright);
+}
+
+.export-toggle-sub {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+/* ─── RANGE BUTTONS ───────────────────────────────────────────────────── */
+
+.export-range-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.export-range-btn {
+  padding: 10px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-dim);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  text-align: center;
+}
+
+.export-range-btn:hover {
+  border-color: var(--border-bright);
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.export-range-btn.active {
+  border-color: var(--accent);
+  color: var(--accent-bright);
+  background: var(--accent-dim);
+}
+
+/* ─── CUSTOM DATE RANGE ───────────────────────────────────────────────── */
+
+.export-custom-range {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 4px;
+  padding: 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-dim);
+}
+
+.export-date-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.export-date-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: var(--text-muted);
+}
+
+.export-date-input {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 7px 10px;
+  letter-spacing: 0.5px;
+  width: 100%;
+  color-scheme: dark;
+}
+
+.export-date-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.export-date-sep {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--text-muted);
+  padding-top: 16px;
+  flex-shrink: 0;
+}
+
+/* ─── INFO SECTION ────────────────────────────────────────────────────── */
+
+.export-includes-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 24px;
+}
+
+.export-include-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  letter-spacing: 0.3px;
+}
+
+.export-include-dot {
+  color: var(--accent-bright);
+  font-size: 8px;
+  flex-shrink: 0;
+}
+
+.export-privacy-note {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+  border-left: 2px solid var(--border-dim);
+  padding-left: 10px;
+}
+
+/* ─── STATUS BAR ──────────────────────────────────────────────────────── */
+
+.export-status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  padding: 10px 14px;
+  border-left: 3px solid transparent;
+}
+
+.export-status-done {
+  background: rgba(80, 168, 112, 0.08);
+  border-left-color: var(--success-bright);
+  color: var(--success-bright);
+}
+
+.export-status-error {
+  background: var(--danger-dim);
+  border-left-color: var(--danger-bright);
+  color: var(--danger-bright);
+}
+
+/* ─── RUN BUTTON ──────────────────────────────────────────────────────── */
+
+.export-run-btn {
+  align-self: flex-start;
+  padding: 13px 32px;
+  background: var(--accent);
+  color: #111111;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.export-run-btn:hover:not(:disabled) {
+  background: var(--accent-bright);
+}
+
+.export-run-btn:disabled,
+.export-run-btn.loading {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ─── VALIDATION ──────────────────────────────────────────────────────── */
+
+.export-validation-msg {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  margin-top: -18px;
+}

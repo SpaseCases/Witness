@@ -9,6 +9,10 @@
  *   - openExternal: lets React open a URL in the system browser
  *     (used by the Python error screen's "OPEN PYTHON.ORG" button).
  *
+ * Step 5 addition:
+ *   - saveFile: lets Export.jsx ask Electron to open a Save dialog and
+ *     write the exported file bytes to wherever the user picks.
+ *
  * Save this file at: witness/electron/preload.js
  */
 
@@ -48,6 +52,12 @@ contextBridge.exposeInMainWorld('witness', {
   // Used by the Python error screen to open python.org.
   // We route through main.js so we can use shell.openExternal safely.
   openExternal: (url) => ipcRenderer.send('open-external', url),
+
+  // ── Save exported file (Step 5) ────────────────────────────────────────────
+  // Called by Export.jsx. Opens a native Save dialog and writes the file.
+  // opts: { defaultName: string, filters: array, buffer: number[] }
+  // Returns: 'saved' | 'cancelled'
+  saveFile: (opts) => ipcRenderer.invoke('save-file', opts),
 
   // ── Platform info ──────────────────────────────────────────────────────────
   platform: process.platform,

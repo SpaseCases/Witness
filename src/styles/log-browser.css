@@ -429,6 +429,12 @@
   border: 1px solid rgba(224, 80, 80, 0.3);
 }
 
+.lb-type-badge.write {
+  color: #5ba8c4;
+  background: rgba(91, 168, 196, 0.1);
+  border: 1px solid rgba(91, 168, 196, 0.3);
+}
+
 .lb-row-star {
   font-size: 0.75rem;
   color: #c38c32;
@@ -847,4 +853,96 @@
   color: #e05050;
   background: rgba(224, 80, 80, 0.07);
   border-color: rgba(224, 80, 80, 0.25);
+}
+
+/* ── Structured Summary Block ─────────────────────────────────────────────── */
+
+.lb-summary-block {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: rgba(245, 168, 48, 0.04);
+  border: 1px solid rgba(245, 168, 48, 0.12);
+  border-left: 3px solid rgba(245, 168, 48, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lb-summary-sentence {
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  line-height: 1.6;
+  font-style: italic;
+}
+
+.lb-summary-highlights {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.lb-summary-highlight-item {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  padding-left: 14px;
+  position: relative;
+}
+
+.lb-summary-highlight-item::before {
+  content: '—';
+  position: absolute;
+  left: 0;
+  color: var(--accent-dim);
+  color: rgba(245, 168, 48, 0.4);
+}
+
+.lb-summary-intentions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(245, 168, 48, 0.1);
+}
+
+.lb-summary-intentions-label {
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.lb-summary-intentions-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lb-summary-intentions-list li {
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  padding-left: 14px;
+  position: relative;
+}
+
+.lb-summary-intentions-list li::before {
+  content: '◆';
+  position: absolute;
+  left: 0;
+  font-size: 0.45rem;
+  color: rgba(245, 168, 48, 0.5);
+  top: 3px;
 }

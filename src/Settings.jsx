@@ -827,6 +827,8 @@ export default function Settings() {
   const [notifyEnabled,  setNotifyEnabled]  = useState(true)
   const [warmupOnStart,  setWarmupOnStart]  = useState(true)
   const [userProfile,    setUserProfile]    = useState('')
+  const [generating,     setGenerating]     = useState(false)
+  const [genError,       setGenError]       = useState('')
   const [questionPool,   setQuestionPool]   = useState([])
 
   // catalog key — incrementing this forces ModelCatalog to reload
@@ -901,6 +903,27 @@ export default function Settings() {
     refreshModels()
     setCatalogKey(k => k + 1)
   }, [refreshModels])
+
+  // ─── Auto-generate context document ──────────────────────────────────────
+
+  const generateContext = async () => {
+    setGenerating(true)
+    setGenError('')
+    try {
+      const res = await fetch(`${API}/settings/generate-context`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) {
+        setGenError(data.detail || 'Generation failed.')
+        return
+      }
+      setUserProfile(data.profile || '')
+      setDirty(true)
+    } catch (err) {
+      setGenError(`Failed to reach backend: ${err.message}`)
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   const saveAll = async () => {
     setSaving(true); setSaveMsg('')
@@ -1033,12 +1056,29 @@ export default function Settings() {
         {/* 5. PERSONAL PROFILE */}
         <Section title="PERSONAL PROFILE" tag="AI CONTEXT DOCUMENT">
           <div className="cfg-profile-wrap">
-            <div className="cfg-field-hint cfg-profile-hint">
-              Write anything the AI should know about you: job, relationships, health
-              history, goals, recurring stressors, context. The AI reads this before
-              generating insights and follow-up questions. Be specific — vague profiles
-              produce generic output.
+            <div className="cfg-profile-header-row">
+              <div className="cfg-field-hint cfg-profile-hint">
+                Write anything the AI should know about you: job, relationships, health
+                history, goals, recurring stressors, context. The AI reads this before
+                generating insights and follow-up questions. Be specific — vague profiles
+                produce generic output.
+              </div>
+              <button
+                className={`cfg-autogen-btn ${generating ? 'cfg-autogen-loading' : ''}`}
+                onClick={generateContext}
+                disabled={generating}
+                title="Generate from your journal entries"
+              >
+                {generating ? (
+                  <><span className="cfg-autogen-spinner" /> GENERATING...</>
+                ) : (
+                  'AUTO-GENERATE'
+                )}
+              </button>
             </div>
+            {genError && (
+              <div className="cfg-autogen-error">{genError}</div>
+            )}
             <textarea
               className="cfg-profile-textarea"
               placeholder="Example: I'm a 34 year old software engineer working remotely. I have a history of anxiety and insomnia..."

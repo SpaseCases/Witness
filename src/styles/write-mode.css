@@ -1,0 +1,215 @@
+/* ─── WRITE MODE SCREEN ──────────────────────────────────────────────────── */
+
+.write-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 2rem 2.5rem;
+  overflow-y: auto;
+  gap: 1.5rem;
+  animation: write-fadein 0.3s ease-out both;
+}
+
+@keyframes write-fadein {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.write-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+/* ── Intro line ──────────────────────────────────────────────────────────── */
+
+.write-intro {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  color: rgba(255,255,255,0.28);
+  letter-spacing: 0.15em;
+  line-height: 1.6;
+  padding: 0.9rem 1.2rem;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-left: 3px solid rgba(245,168,48,0.25);
+}
+
+/* ── Editor ──────────────────────────────────────────────────────────────── */
+
+.write-editor-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+  min-height: 320px;
+}
+
+.write-editor {
+  flex: 1;
+  width: 100%;
+  min-height: 320px;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.88);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.82rem;
+  line-height: 1.85;
+  padding: 1.4rem 1.6rem;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+
+.write-editor:focus {
+  border-color: rgba(245, 168, 48, 0.35);
+}
+
+.write-editor::placeholder {
+  color: rgba(255,255,255,0.18);
+  font-style: italic;
+}
+
+.write-editor:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── Character count ─────────────────────────────────────────────────────── */
+
+.write-char-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.write-char-count {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.3);
+}
+
+.write-char-low {
+  color: rgba(255,255,255,0.2);
+}
+
+.write-char-min {
+  color: rgba(245,168,48,0.5);
+}
+
+/* ── Controls ────────────────────────────────────────────────────────────── */
+
+.write-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.write-save-btn {
+  background: rgba(245,168,48,0.12);
+  color: #f5a830;
+  border: 1px solid rgba(245,168,48,0.45);
+  padding: 0.75rem 2.2rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.write-save-btn:hover:not(:disabled) {
+  background: rgba(245,168,48,0.2);
+}
+
+.write-save-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.write-discard-btn {
+  background: transparent;
+  color: rgba(255,255,255,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  padding: 0.75rem 1.5rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.write-discard-btn:hover {
+  color: rgba(255,255,255,0.55);
+  border-color: rgba(255,255,255,0.22);
+}
+
+/* ── Saving state ────────────────────────────────────────────────────────── */
+
+.write-saving-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  color: rgba(255,255,255,0.45);
+  letter-spacing: 0.1em;
+}
+
+.write-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.1);
+  border-top-color: #f5a830;
+  border-radius: 50%;
+  animation: write-spin 0.75s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes write-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Saved confirmation ──────────────────────────────────────────────────── */
+
+.write-saved-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+  color: #6dbd8a;
+  animation: write-fadein 0.3s ease-out both;
+}
+
+.write-saved-icon {
+  font-size: 1rem;
+}
+
+.write-saved-text {
+  letter-spacing: 0.18em;
+}
+
+/* ── Error ───────────────────────────────────────────────────────────────── */
+
+.write-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.8rem 1rem;
+  background: rgba(224,80,80,0.06);
+  border: 1px solid rgba(224,80,80,0.25);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  color: #e05050;
+  line-height: 1.5;
+}
+
+.write-error-label {
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  flex-shrink: 0;
+  opacity: 0.7;
+}

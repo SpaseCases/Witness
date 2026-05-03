@@ -99,6 +99,12 @@ function EntryDetail({ entry, onClose, onStar, onDelete }) {
 
   const hasDayTags = goodTags.length > 0 || badTags.length > 0
 
+  // Parse structured summary — stored as JSON, may be null on older entries
+  const structuredSummary = (() => {
+    if (!detail?.structured_summary) return null
+    try { return JSON.parse(detail.structured_summary) } catch { return null }
+  })()
+
   return (
     <div className="lb-detail-overlay" onClick={onClose}>
       <div className="lb-detail-panel" onClick={e => e.stopPropagation()}>
@@ -106,7 +112,7 @@ function EntryDetail({ entry, onClose, onStar, onDelete }) {
         <div className="lb-detail-header">
           <div className="lb-detail-header-left">
             <span className={`lb-type-badge ${entry.type}`}>
-              {entry.type === 'daily' ? 'ENTRY' : 'DUMP'}
+              {entry.type === 'daily' ? 'ENTRY' : entry.type === 'write' ? 'WRITE' : 'DUMP'}
             </span>
             <span className="lb-detail-date">
               {fmtDate(entry.created_at)} · {fmtTime(entry.created_at)}
@@ -144,6 +150,30 @@ function EntryDetail({ entry, onClose, onStar, onDelete }) {
             )}
 
             <div className="lb-detail-section-label">TRANSCRIPT</div>
+            {structuredSummary && (
+              <div className="lb-summary-block">
+                {structuredSummary.summary && (
+                  <div className="lb-summary-sentence">{structuredSummary.summary}</div>
+                )}
+                {structuredSummary.highlights?.length > 0 && (
+                  <ul className="lb-summary-highlights">
+                    {structuredSummary.highlights.map((h, i) => (
+                      <li key={i} className="lb-summary-highlight-item">{h}</li>
+                    ))}
+                  </ul>
+                )}
+                {structuredSummary.intentions?.length > 0 && (
+                  <div className="lb-summary-intentions">
+                    <span className="lb-summary-intentions-label">STATED INTENTIONS</span>
+                    <ul className="lb-summary-intentions-list">
+                      {structuredSummary.intentions.map((item, i) => (
+                        <li key={i}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="lb-detail-transcript">
               {detail.transcript || '— no transcript —'}
             </div>
@@ -244,7 +274,7 @@ function EntryRow({ entry, onClick, showDistance, selectMode, selected, onToggle
 
       <div className="lb-row-left">
         <span className={`lb-type-badge ${entry.type}`}>
-          {entry.type === 'daily' ? 'ENTRY' : 'DUMP'}
+          {entry.type === 'daily' ? 'ENTRY' : entry.type === 'write' ? 'WRITE' : 'DUMP'}
         </span>
         {entry.starred === 1 && <span className="lb-row-star">★</span>}
       </div>

@@ -3,9 +3,14 @@ WITNESS -- Ollama Manager
 Starts Ollama on app launch, stops it on close.
 Checks model is loaded and ready before the UI appears.
 
+Cross-platform (Windows + Linux):
+  _find_ollama() checks both Windows AppData locations and Linux
+  standard install paths (/usr/local/bin, /usr/bin, ~/.local/bin).
+  All other logic is identical across platforms.
+
 PyInstaller fix (Step 17):
   - PyInstaller bundles Python in an isolated env with no PATH access.
-  - _find_ollama() searches known Windows install locations directly,
+  - _find_ollama() searches known install locations directly,
     then falls back to PATH (which works in dev mode / system Python).
   - Electron's main.js also detects the Ollama path and passes it via
     the OLLAMA_PATH environment variable as a belt-and-suspenders approach.
@@ -67,39 +72,54 @@ def _find_ollama() -> str:
     Return the full path to the Ollama executable.
 
     Search order:
-    1. OLLAMA_PATH env var — set by Electron's main.js, which has full PATH access.
-       This is the primary fix for the PyInstaller isolation problem.
-    2. Common Windows install locations — checked directly with os.path.isfile.
+    1. OLLAMA_PATH env var — set by Electron's main.js, which has full PATH
+       access even when the app is packaged. Most reliable in production.
+    2. Platform-specific known install locations — checked with os.path.isfile.
+       Windows: AppData\\Local\\Programs\\Ollama\\ollama.exe
+       Linux:   /usr/local/bin/ollama, /usr/bin/ollama, ~/.local/bin/ollama
     3. shutil.which() — works in dev mode where PATH is available.
-    4. Bare "ollama" as last resort.
+    4. Bare "ollama" as last resort (relies on PATH at subprocess time).
     """
 
-    # 1. Env var set by Electron (most reliable when running as packaged .exe)
+    # 1. Env var set by Electron (most reliable when running as packaged app)
     env_path = os.environ.get("OLLAMA_PATH", "").strip()
     if env_path and os.path.isfile(env_path):
         log.info(f"Found Ollama via OLLAMA_PATH: {env_path}")
         return env_path
 
-    # 2. Common Windows install locations
-    username     = os.environ.get("USERNAME", "")
-    localappdata = os.environ.get("LOCALAPPDATA", "")
+    is_windows = sys.platform == "win32"
 
-    candidates = []
-    if localappdata:
-        candidates.append(os.path.join(localappdata, "Programs", "Ollama", "ollama.exe"))
-    if username:
-        candidates.append(rf"C:\Users\{username}\AppData\Local\Programs\Ollama\ollama.exe")
-    candidates += [
-        r"C:\Program Files\Ollama\ollama.exe",
-        r"C:\Program Files (x86)\Ollama\ollama.exe",
-    ]
+    if is_windows:
+        # 2a. Common Windows install locations
+        username     = os.environ.get("USERNAME", "")
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+
+        candidates = []
+        if localappdata:
+            candidates.append(os.path.join(localappdata, "Programs", "Ollama", "ollama.exe"))
+        if username:
+            candidates.append(rf"C:\Users\{username}\AppData\Local\Programs\Ollama\ollama.exe")
+        candidates += [
+            r"C:\Program Files\Ollama\ollama.exe",
+            r"C:\Program Files (x86)\Ollama\ollama.exe",
+        ]
+
+    else:
+        # 2b. Common Linux (and Mac) install locations
+        home = os.environ.get("HOME", "")
+        candidates = [
+            "/usr/local/bin/ollama",
+            "/usr/bin/ollama",
+            os.path.join(home, ".local", "bin", "ollama") if home else "",
+            "/opt/ollama/ollama",
+        ]
 
     for p in candidates:
         if p and os.path.isfile(p):
             log.info(f"Found Ollama at: {p}")
             return p
 
-    # 3. PATH search (works in dev mode)
+    # 3. PATH search (works in dev mode on all platforms)
     found = shutil.which("ollama")
     if found:
         log.info(f"Found Ollama in PATH: {found}")
@@ -143,11 +163,18 @@ async def start_ollama():
         ollama_exe = _find_ollama()
         log.info(f"Using Ollama executable: {ollama_exe}")
 
-        _ollama_proc = subprocess.Popen(
-            [ollama_exe, "serve"],
+        # CREATE_NO_WINDOW suppresses the console popup on Windows.
+        # On Linux this flag does not exist and must not be passed.
+        spawn_kwargs = dict(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        )
+        if sys.platform == "win32":
+            spawn_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+        _ollama_proc = subprocess.Popen(
+            [ollama_exe, "serve"],
+            **spawn_kwargs
         )
 
         for attempt in range(20):

@@ -1271,3 +1271,70 @@
   letter-spacing: 0.06em;
   padding: 0.5rem 0;
 }
+
+/* ── Auto-generate context button ────────────────────────────────────────── */
+
+.cfg-profile-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.cfg-profile-header-row .cfg-profile-hint {
+  flex: 1;
+}
+
+.cfg-autogen-btn {
+  flex-shrink: 0;
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #f5a830;
+  background: rgba(245, 168, 48, 0.08);
+  border: 1px solid rgba(245, 168, 48, 0.4);
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: background 0.2s, opacity 0.2s;
+  white-space: nowrap;
+}
+
+.cfg-autogen-btn:hover:not(:disabled) {
+  background: rgba(245, 168, 48, 0.15);
+}
+
+.cfg-autogen-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.cfg-autogen-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(245, 168, 48, 0.3);
+  border-top-color: #f5a830;
+  border-radius: 50%;
+  animation: autogen-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes autogen-spin {
+  to { transform: rotate(360deg); }
+}
+
+.cfg-autogen-error {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: #e05050;
+  background: rgba(224, 80, 80, 0.06);
+  border: 1px solid rgba(224, 80, 80, 0.2);
+  padding: 0.5rem 0.8rem;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+}

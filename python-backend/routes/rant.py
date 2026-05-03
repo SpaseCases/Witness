@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from database import get_conn
 from ollama_manager import generate
 from routes.transcribe import start_context_update
+from routes.memory import start_memory_update
 
 router = APIRouter()
 
@@ -140,5 +141,6 @@ async def save_rant(req: SaveRequest):
     # Fire-and-forget: update personal context profile from the rant
     if req.transcript.strip():
         start_context_update(req.transcript, entry_type='rant')
+        start_memory_update(req.transcript, entry_type='rant')
 
     return {'id': new_id, 'saved': True}

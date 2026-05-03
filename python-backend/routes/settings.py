@@ -625,6 +625,104 @@ async def pull_model(body: PullRequest):
     )
 
 
+
+# ─── AUTO-GENERATE CONTEXT DOCUMENT ─────────────────────────────────────────
+#
+# Pulls all journal entries from SQLite, sends them to Ollama, and asks it
+# to write a concise personal context document. Result is written directly
+# into the user_profile setting. The frontend polls or awaits the response.
+#
+# This is a synchronous (awaited) endpoint — the frontend shows a loading
+# state and the response contains the generated text. The user can edit it
+# after generation.
+
+_GENERATE_CONTEXT_PROMPT = """You are reading someone's private journal entries to write a personal context document for an AI assistant.
+
+Read all the entries below and write a concise personal context document about this person.
+
+Rules:
+- 3 to 5 sentences maximum
+- First person ("I am...", "I work...", "I tend to...")
+- Cover: who they are, what they do, recurring themes or stressors, goals or patterns you noticed
+- Be specific — use real details from the entries, not generic observations
+- Do not use lists or bullet points — write in flowing prose
+- Do not mention that this was generated from journal entries
+- If there is not enough data yet, write a brief honest placeholder
+
+Journal entries (oldest to newest):
+{entries}
+
+Write the context document now. Return ONLY the document text — no explanation, no preamble, no quotes."""
+
+
+@router.post("/generate-context")
+async def generate_context_document():
+    """
+    Pull all journal entries, send to Ollama, write a personal context document.
+    Returns the generated text so the frontend can display it immediately.
+    Also saves it to the user_profile setting.
+    """
+    from ollama_manager import generate
+
+    # Fetch all entries from SQLite, oldest first
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT date, type, transcript
+            FROM entries
+            WHERE transcript IS NOT NULL AND LENGTH(TRIM(transcript)) > 20
+            ORDER BY date ASC, id ASC
+            LIMIT 60
+        """).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="No journal entries found. Record at least a few entries before generating a context document."
+        )
+
+    # Format entries for the prompt — keep it compact to fit in context
+    entry_blocks = []
+    for row in rows:
+        date_str  = row["date"] or "unknown date"
+        type_str  = row["type"] or "entry"
+        text      = (row["transcript"] or "").strip()
+        if len(text) > 800:
+            text = text[:800] + "..."
+        label = "ENTRY" if type_str == "daily" else type_str.upper()
+        entry_blocks.append(f"[{date_str} — {label}]\n{text}")
+
+    entries_text = "\n\n".join(entry_blocks)
+    prompt       = _GENERATE_CONTEXT_PROMPT.format(entries=entries_text)
+
+    log.info(f"Generating context document from {len(rows)} entries...")
+
+    try:
+        raw = await generate(prompt=prompt, temperature=0.4, max_tokens=400)
+
+        # Strip think blocks (DeepSeek R1) and any markdown
+        import re
+        text = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
+        text = re.sub(r'```.*?```', '', text, flags=re.DOTALL).strip()
+        text = text.strip('"').strip()
+
+        if not text or len(text) < 20:
+            raise HTTPException(status_code=500, detail="AI returned an empty response. Try again.")
+
+        # Save to settings
+        set_setting("user_profile", text)
+        log.info(f"Context document generated and saved ({len(text)} chars).")
+
+        return {"status": "ok", "profile": text, "entry_count": len(rows)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Context generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
 # ─── WIPE ENDPOINTS ──────────────────────────────────────────────────────────
 
 @router.post("/wipe-entries")
@@ -634,6 +732,8 @@ def wipe_entries():
         tables = ["qa_pairs", "rant_topics", "metrics", "flags", "weekly_recaps", "entries"]
         for table in tables:
             conn.execute(f"DELETE FROM {table}")
+        # Also wipe memory facts and memory document — they reference deleted entries
+        conn.execute("DELETE FROM memory_facts")
         try:
             conn.execute("DELETE FROM rants WHERE 1=1")
         except Exception:
@@ -652,7 +752,7 @@ def wipe_entries():
 def wipe_all():
     conn = get_conn()
     try:
-        tables = ["qa_pairs", "rant_topics", "metrics", "flags", "weekly_recaps", "entries", "health_data"]
+        tables = ["qa_pairs", "rant_topics", "metrics", "flags", "weekly_recaps", "entries", "health_data", "memory_facts", "todos"]
         for table in tables:
             conn.execute(f"DELETE FROM {table}")
         try:
@@ -660,16 +760,18 @@ def wipe_all():
         except Exception:
             pass
         defaults = {
-            "model":             "deepseek-r1:14b",
-            "context_window":    "16384",
-            "notify_time":       "20:00",
-            "notify_enabled":    "1",
-            "theme_accent":      "amber",
-            "health_watch_path": "",
-            "user_profile":      "",
-            "question_pool":     "[]",
-            "onboarded":         "0",
-            "warmup_on_start":   "1",
+            "model":                    "deepseek-r1:14b",
+            "context_window":           "16384",
+            "notify_time":              "20:00",
+            "notify_enabled":           "1",
+            "theme_accent":             "amber",
+            "health_watch_path":        "",
+            "user_profile":             "",
+            "question_pool":            "[]",
+            "onboarded":                "0",
+            "warmup_on_start":          "1",
+            "memory_document":          "",
+            "memory_document_updated":  "",
         }
         for key, val in defaults.items():
             conn.execute(

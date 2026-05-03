@@ -4,7 +4,7 @@
  * Save this file at: witness/src/App.jsx
  *
  * Changes from Step 16:
- *   - Version bumped to 1.0.0 everywhere
+ *   - Version bumped to 2.0.0 everywhere
  *   - Dashboard To-Do List: real todos table via /todos API
  *   - Seed tasks with EXAMPLE badge for new users
  *   - Done tasks sink to bottom at 40% opacity
@@ -16,25 +16,35 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { gsap } from 'gsap'
 import JournalEntry from './JournalEntry'
+import Memory from './Memory'
 import RantMode     from './RantMode'
+import WriteMode    from './WriteMode'
 import LogBrowser   from './LogBrowser'
 import Debrief      from './Debrief'
 import Vitals       from './Vitals'
 import WeeklyRecap  from './WeeklyRecap'
 import Settings     from './Settings'
 import Todos       from './Todos'
+import Chat        from './Chat'
+import Profile     from './Profile'
+import Export      from './Export'
 
 const API = 'http://127.0.0.1:8000'
 
 const NAV = [
   { id: 'dashboard', label: 'COMMAND',  sub: 'Dashboard' },
   { id: 'journal',   label: 'RECORD',   sub: 'Entry' },
+  { id: 'memory',    label: 'MEMORY',   sub: 'AI Memory' },
+  { id: 'write',     label: 'WRITE',    sub: 'Text Entry' },
   { id: 'rant',      label: 'DUMP',     sub: 'Rant Mode' },
   { id: 'logs',      label: 'ARCHIVE',  sub: 'Log Browser' },
   { id: 'todos',     label: 'TASKS',    sub: 'To-Do & Projects' },
   { id: 'insights',  label: 'DEBRIEF',  sub: 'Insights & Flags' },
   { id: 'health',    label: 'VITALS',   sub: 'Health Data' },
   { id: 'recap',     label: 'SITREP',   sub: 'Weekly Recap' },
+  { id: 'chat',      label: 'CHAT',     sub: 'Journal Chat' },
+  { id: 'profile',   label: 'PROFILE',  sub: 'Self-Model' },
+  { id: 'export',    label: 'EXPORT',   sub: 'Save Journal' },
   { id: 'settings',  label: 'CONFIG',   sub: 'Settings' },
 ]
 
@@ -106,7 +116,7 @@ function Sidebar({ active, onNav, ollamaStatus }) {
       </ul>
 
       <div className="sidebar-foot">
-        <span className="sidebar-foot-text">WITNESS v1.0.0</span>
+        <span className="sidebar-foot-text">WITNESS v2.0.0</span>
         <span className="sidebar-foot-text">BUILD 2026.04</span>
       </div>
     </nav>
@@ -989,12 +999,17 @@ export default function App() {
         />
       )
       case 'journal':   return <JournalEntry onSaved={handlers.onEntrySaved} />
+      case 'memory':    return <Memory />
       case 'rant':      return <RantMode     onSaved={handlers.onRantSaved} backendReady={backendReady} />
+      case 'write':     return <WriteMode    onSaved={handlers.onEntrySaved} />
       case 'logs':      return <LogBrowser />
       case 'insights':  return <Debrief />
       case 'health':    return <Vitals />
       case 'recap':     return <WeeklyRecap />
       case 'todos':     return <Todos />
+      case 'chat':      return <Chat />
+      case 'profile':   return <Profile />
+      case 'export':    return <Export />
       case 'settings':  return <Settings />
       default:          return (
         <Dashboard

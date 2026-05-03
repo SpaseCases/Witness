@@ -1,12 +1,14 @@
 {
   "name": "witness",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Local AI Journal - Private. Honest. Yours.",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
     "build": "vite build",
     "dist": "vite build && electron-builder",
+    "dist:win": "vite build && electron-builder --win",
+    "dist:linux": "vite build && electron-builder --linux",
     "electron": "electron ."
   },
   "build": {
@@ -47,6 +49,30 @@
       "license": "assets/LICENSE.txt",
       "include": "installer.nsh",
       "artifactName": "Witness-Setup-${version}.exe"
+    },
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb",      "arch": ["x64"] }
+      ],
+      "icon": "assets/icon.png",
+      "category": "Utility",
+      "synopsis": "Local AI Journal - Private. Honest. Yours.",
+      "artifactName": "Witness-${version}-${arch}.${ext}"
+    },
+    "deb": {
+      "depends": [
+        "portaudio19-dev",
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0"
+      ]
     }
   },
   "dependencies": {

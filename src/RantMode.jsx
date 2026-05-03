@@ -298,7 +298,7 @@ export default function RantMode({ onSaved, backendReady }) {
               className="rant-transcript-box"
               value={transcript}
               onChange={e => setTranscript(e.target.value)}
-              spellCheck={false}
+              spellCheck={true}
             />
 
             {tags.length > 0 && (

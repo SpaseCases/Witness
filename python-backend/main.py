@@ -3,6 +3,11 @@ WITNESS — Python Backend
 FastAPI server handling: Ollama, Faster-Whisper, SQLite, ChromaDB
 Starts automatically when the Electron app opens.
 Kills automatically when the Electron app closes.
+
+Step 5 addition:
+  - export_router registered at /export
+    Provides GET /export/txt and GET /export/pdf
+    Requires: pip install fpdf2
 """
 
 import os
@@ -26,6 +31,11 @@ from routes.transcribe import router as transcribe_router
 from routes.rant       import router as rant_router
 from routes.recap      import router as recap_router
 from routes.todos      import router as todos_router
+from routes.chat       import router as chat_router
+from routes.monthly_recap import router as monthly_recap_router
+from routes.profile    import router as profile_router
+from routes.export     import router as export_router      # Step 5: export
+from routes.memory     import router as memory_router      # Step 5: memory
 
 # ── Health inbox check ────────────────────────────────────────────────────────
 from routes.health import check_health_inbox
@@ -61,9 +71,6 @@ async def lifespan(app: FastAPI):
     log.info("Witness backend starting...")
 
     # ── Phase 1: DB init FIRST, then health inbox check ─────────────────────
-    # init_db() must fully complete before check_health_inbox() runs,
-    # because check_health_inbox() calls get_setting() which needs the
-    # settings table to already exist.
     log.info("Phase 1a: initializing database...")
     await asyncio.to_thread(init_db)
     log.info("Phase 1a complete: database ready.")
@@ -91,7 +98,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Witness API",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -112,28 +119,35 @@ app.add_middleware(
 
 # ─── ROUTES ──────────────────────────────────────────────────────────────────
 
-app.include_router(entries_router,    prefix="/entries",    tags=["entries"])
-app.include_router(insights_router,   prefix="/insights",   tags=["insights"])
-app.include_router(health_router,     prefix="/health",     tags=["health"])
-app.include_router(settings_router,   prefix="/settings",   tags=["settings"])
-app.include_router(transcribe_router, prefix="/transcribe", tags=["transcribe"])
-app.include_router(rant_router,       prefix="/rant",       tags=["rant"])
-app.include_router(recap_router,      prefix="/recap",      tags=["recap"])
-app.include_router(todos_router,      prefix="/todos",      tags=["todos"])
+app.include_router(entries_router,       prefix="/entries",       tags=["entries"])
+app.include_router(insights_router,      prefix="/insights",      tags=["insights"])
+app.include_router(health_router,        prefix="/health",        tags=["health"])
+app.include_router(settings_router,      prefix="/settings",      tags=["settings"])
+app.include_router(transcribe_router,    prefix="/transcribe",    tags=["transcribe"])
+app.include_router(rant_router,          prefix="/rant",          tags=["rant"])
+app.include_router(recap_router,         prefix="/recap",         tags=["recap"])
+app.include_router(todos_router,         prefix="/todos",         tags=["todos"])
+app.include_router(chat_router,          prefix="/chat",          tags=["chat"])
+app.include_router(monthly_recap_router, prefix="/recap/monthly", tags=["monthly_recap"])
+app.include_router(profile_router,       prefix="/profile",       tags=["profile"])
+app.include_router(export_router,        prefix="/export",        tags=["export"])  # Step 5
+app.include_router(memory_router,        prefix="/memory",        tags=["memory"])   # Step 5
 
 # ─── STATUS ───────────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "app": "witness", "version": "1.0.0"}
+    return {"status": "ok", "app": "witness", "version": "2.0.0"}
 
 @app.get("/status")
 async def status():
-    ollama_ok = await check_ollama()
+    from database import get_setting
+    ollama_ok    = await check_ollama()
+    active_model = get_setting("model", os.environ.get("WITNESS_MODEL", "gemma4:3b"))
     return {
         "backend": "online",
         "ollama":  "online" if ollama_ok else "offline",
-        "model":   os.environ.get("WITNESS_MODEL", "gemma4:3b")
+        "model":   active_model
     }
 
 # ─── ENTRY POINT ─────────────────────────────────────────────────────────────

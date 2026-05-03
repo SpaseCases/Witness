@@ -3,6 +3,11 @@ WITNESS -- Database Layer
 SQLite via Python's built-in sqlite3.
 All tables created here on first run.
 
+Step 4 additions:
+  - user_profile table: stores longitudinal self-model snapshots generated
+    by /profile/generate. Multiple rows can exist; the API returns the newest.
+  - Safe: IF NOT EXISTS guarantees no crash on existing databases.
+
 Bug 2 fix:
   - Added 'tags' TEXT column (DEFAULT '[]') to the entries table.
     This is where rant topic tags are stored going forward.
@@ -96,6 +101,10 @@ def init_db():
             log.info("Migration: adding 'bad_tags' column to entries table.")
             c.execute("ALTER TABLE entries ADD COLUMN bad_tags TEXT NOT NULL DEFAULT '[]'")
 
+        if not _column_exists(conn, "entries", "structured_summary"):
+            log.info("Migration: adding 'structured_summary' column to entries table.")
+            c.execute("ALTER TABLE entries ADD COLUMN structured_summary TEXT")
+
         # ── AI-EXTRACTED METRICS ─────────────────────────────────────────────
         c.execute("""
             CREATE TABLE IF NOT EXISTS metrics (
@@ -176,6 +185,24 @@ def init_db():
                 best_day_note  TEXT,
                 worst_day_note TEXT,
                 exported       INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
+        # ── MONTHLY RECAPS ───────────────────────────────────────────────────
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS monthly_recaps (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                period_start        TEXT    NOT NULL,
+                period_end          TEXT    NOT NULL,
+                created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+                summary             TEXT,
+                trend_direction     TEXT,
+                biggest_shift       TEXT,
+                recurring_themes    TEXT,
+                honest_observation  TEXT,
+                watch_next_month    TEXT,
+                goals_next          TEXT,
+                UNIQUE(period_start, period_end)
             )
         """)
 
@@ -271,6 +298,18 @@ def init_db():
             log.info("Migration: adding 'is_project' column to todos table.")
             c.execute("ALTER TABLE todos ADD COLUMN is_project INTEGER NOT NULL DEFAULT 0")
 
+        # ── AI MEMORY FACTS (Step 5) ─────────────────────────────────────────
+        # Stores atomic personal facts extracted from journal entries.
+        # dismissed=1 means the user deleted it; excluded from all reads.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS memory_facts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                fact        TEXT    NOT NULL,
+                dismissed   INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
         # ── HEALTH AUTO-IMPORT LOG ───────────────────────────────────────────
         # Tracks every file that has been auto-imported from the watch folder
         # so we never import the same file twice.
@@ -285,6 +324,22 @@ def init_db():
             )
         """)
 
+        # ── LONGITUDINAL SELF-MODEL (Step 4) ────────────────────────────────
+        # Stores generated profile snapshots. Each call to /profile/generate
+        # inserts a new row; /profile/ returns the most recent one.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS user_profile (
+                id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+                generated_at                TEXT    NOT NULL DEFAULT (datetime('now')),
+                recurring_themes            TEXT,   -- JSON array of strings
+                emotional_patterns          TEXT,   -- JSON array of strings
+                apparent_values             TEXT,   -- JSON array of strings
+                recurring_challenges        TEXT,   -- JSON array of strings
+                plain_summary               TEXT,
+                entry_count_at_generation   INTEGER
+            )
+        """)
+
         # ── INDEXES ──────────────────────────────────────────────────────────
         c.execute("CREATE INDEX IF NOT EXISTS idx_entries_date    ON entries(date)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_entries_type    ON entries(type)")
@@ -293,6 +348,7 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_health_date     ON health_data(date)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_flags_severity  ON flags(severity)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_health_imports_fn ON health_imports(filename)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_memory_facts_dismissed ON memory_facts(dismissed)")
 
         # ── DEFAULT SETTINGS ─────────────────────────────────────────────────
         defaults = {
@@ -307,6 +363,8 @@ def init_db():
             "onboarded":         "0",
             "rants_migrated":    "0",
             "warmup_on_start":   "1",
+            "memory_document":         "",
+            "memory_document_updated": "",
         }
         for key, val in defaults.items():
             c.execute(

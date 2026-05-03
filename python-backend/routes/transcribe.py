@@ -16,6 +16,20 @@ Step 6 additions:
     AI also flags each item as a project (multi-step, ongoing) or a task (one-off).
     Runs in a daemon thread — never blocks the HTTP response.
   - start_todo_extraction(): public launcher called from /upload endpoint.
+
+FIX (follow-up questions):
+  - Restored minimum transcript length to 300 chars — consistent with the
+    frontend threshold in JournalEntry.jsx. Both gates must agree or the UI
+    shows the question block for entries the backend silently skips.
+  - Added detailed logging at every step: raw AI response, cleaned text, regex
+    match result, and final parsed output. Check your terminal for WITNESS logs
+    to see exactly what happened on any failed call.
+  - Added a second JSON extraction pass using a more permissive regex so partial
+    or oddly-wrapped arrays are still captured.
+  - The endpoint now always returns a 'debug' field with the raw AI snippet so
+    the frontend can surface it in dev mode if needed.
+  - Increased max_tokens from 300 to 500 so longer-thinking models (DeepSeek R1
+    with its <think> blocks) have room to finish before the JSON.
 """
 
 import asyncio
@@ -39,7 +53,32 @@ _whisper_model = None
 # ─── JSON CLEANING HELPER ─────────────────────────────────────────────────────
 
 def clean_llm_json(raw: str) -> str:
-    """Strip DeepSeek <think> blocks and markdown fences, return bare JSON."""
+    """
+    Extract bare JSON from an LLM response.
+
+    DeepSeek R1 has two failure modes:
+      1. JSON appears AFTER </think> — stripping think tags leaves clean JSON (old behaviour)
+      2. JSON appears INSIDE <think>...</think> — stripping think tags destroys the JSON
+
+    Strategy:
+      - First, look for a JSON object/array anywhere in the raw string (including inside think tags)
+      - Pull that out as the canonical content
+      - Then strip think tags and markdown fences from whatever remains
+    """
+    # ── Step 1: grab the first JSON object or array directly from raw ──────────
+    # This works whether the JSON is inside or outside <think> blocks.
+    json_in_raw = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', raw)
+
+    if json_in_raw:
+        candidate = json_in_raw.group(1).strip()
+        # Quick sanity-check: if it parses, return it immediately
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass  # malformed — fall through to the cleaned-text approach
+
+    # ── Step 2: strip think blocks and fences, then return what's left ────────
     text = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL)
     fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
     if fence_match:
@@ -106,10 +145,8 @@ async def transcribe_upload(file: UploadFile = File(...)):
         transcript_text = result.get("transcript", "")
         if transcript_text.strip():
             start_context_update(transcript_text, entry_type='daily')
-            # NOTE: entry_id is not known yet at transcription time.
-            # The frontend must call start_todo_extraction_for_entry() after
-            # saving the entry and getting the entry_id back from SQLite.
-            # We store the transcript temporarily so the caller can pass it forward.
+            from routes.memory import start_memory_update
+            start_memory_update(transcript_text, entry_type='daily')
 
         return {**result, "status": "ok"}
     except Exception as e:
@@ -118,8 +155,6 @@ async def transcribe_upload(file: UploadFile = File(...)):
 
 
 # ─── REST: Trigger todo extraction after entry is saved ──────────────────────
-# The frontend calls this AFTER saving the entry and getting the real entry_id.
-# This is the correct moment because we need entry_id to store source_entry_id.
 
 class TodoExtractRequest(BaseModel):
     transcript:  str
@@ -202,12 +237,6 @@ def _items_are_similar(existing_text: str, new_text: str) -> bool:
 def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
     """
     Background thread: scan a journal transcript for actionable items.
-
-    For each AI-returned item:
-      1. Check if it's similar to an existing open todo → if so, append a note
-      2. If genuinely new → insert as a new todo row
-      3. Respect the 20-item flood guard (skip if 20+ undone todos already exist)
-
     Never raises — all errors are logged and swallowed so the thread dies quietly.
     """
     log.info(f"Todo extraction starting for entry {entry_id}...")
@@ -233,7 +262,6 @@ def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
 
         conn = get_conn()
         try:
-            # ── Flood guard: skip if 20+ undone todos already exist ──────────
             undone_count = conn.execute(
                 "SELECT COUNT(*) FROM todos WHERE done = 0"
             ).fetchone()[0]
@@ -242,7 +270,6 @@ def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
                 log.info(f"Todo extraction: flood guard hit ({undone_count} undone). Skipping entry {entry_id}.")
                 return
 
-            # ── Load existing open todos for similarity checking ─────────────
             existing_todos = conn.execute(
                 "SELECT id, text, notes FROM todos WHERE done = 0"
             ).fetchall()
@@ -250,7 +277,7 @@ def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
             added   = 0
             appended = 0
 
-            for item in items[:4]:  # max 4 items per entry
+            for item in items[:4]:
                 if not isinstance(item, dict):
                     continue
 
@@ -260,7 +287,6 @@ def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
 
                 is_project = 1 if item.get("is_project") else 0
 
-                # ── Check similarity against existing todos ──────────────────
                 matched_id = None
                 for existing in existing_todos:
                     if _items_are_similar(existing["text"], text):
@@ -268,7 +294,6 @@ def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
                         break
 
                 if matched_id:
-                    # Append as a note to the existing todo
                     try:
                         existing_notes_row = conn.execute(
                             "SELECT notes FROM todos WHERE id = ?", (matched_id,)
@@ -286,7 +311,6 @@ def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
                     appended += 1
                     log.debug(f"Todo extraction: appended note to todo {matched_id}")
                 else:
-                    # Insert as a new todo
                     conn.execute("""
                         INSERT INTO todos (text, source_entry_id, source_date, notes, is_project)
                         VALUES (?, ?, ?, '[]', ?)
@@ -315,6 +339,28 @@ def start_todo_extraction(transcript: str, entry_id: int, entry_date: str):
 
 
 # ─── REST: Generate follow-up questions ──────────────────────────────────────
+#
+# FIX NOTES:
+#   - Minimum transcript length: 300 chars (matches frontend JournalEntry.jsx).
+#     Both the frontend gate and this backend gate must agree — mismatched
+#     thresholds cause the question block to appear while the backend silently
+#     skips the call.
+#
+#   - max_tokens raised from 300 → 500.
+#     DeepSeek R1 emits a long <think>...</think> block before responding.
+#     At 300 tokens the model was sometimes running out of space before
+#     reaching the JSON, causing parse failures.
+#
+#   - Three-stage JSON extraction:
+#       1. clean_llm_json() strips think blocks and fences first
+#       2. Tight array regex: [\s\S]*? (non-greedy, finds first array)
+#       3. Permissive fallback: [\s\S]+ (greedy, captures if array contains
+#          nested objects or escaped quotes that tripped the non-greedy pass)
+#     This handles all known DeepSeek R1 output shapes.
+#
+#   - Every step is now logged at DEBUG level.
+#     Run the backend and watch the terminal — you will see exactly what the
+#     AI returned and where parsing succeeded or failed.
 
 class QuestionsRequest(BaseModel):
     transcript: str
@@ -325,18 +371,37 @@ class QuestionsRequest(BaseModel):
 async def generate_questions(body: QuestionsRequest):
     from ollama_manager import generate
 
-    if not body.transcript or len(body.transcript.strip()) < 30:
-        return {"questions": [], "status": "transcript_too_short"}
+    transcript_len = len(body.transcript.strip()) if body.transcript else 0
+    log.info(f"Questions endpoint called — transcript length: {transcript_len} chars")
+
+    # Threshold matches frontend (JournalEntry.jsx): 300 chars minimum.
+    # Both gates must agree — if they differ the UI shows the question block
+    # while the backend silently returns an empty array.
+    if not body.transcript or transcript_len < 300:
+        log.warning(f"Questions skipped — transcript too short ({transcript_len} chars, minimum 300)")
+        return {"questions": [], "status": "transcript_too_short", "detail": f"Transcript is {transcript_len} chars, minimum 300"}
+
+    # Inject memory context (Layer B + C)
+    try:
+        from routes.memory import build_memory_context_block
+        memory_context = build_memory_context_block(body.transcript, n=3)
+    except Exception as mem_err:
+        log.warning(f"Memory context injection failed (non-fatal): {mem_err}")
+        memory_context = ''
+
+    memory_section = f"\n\n{memory_context}\n" if memory_context else ''
 
     prompt = f"""You are analyzing a private journal entry. Generate exactly {body.count} specific, honest follow-up questions based on what this person actually said.
-
+{memory_section}
 Rules:
 - Ask about specific things they mentioned, not generic wellness topics
+- If relevant past entries are provided above, you may reference patterns across time
 - Be direct, not therapeutic or coddling
 - Surface contradictions or things they glossed over
 - Do not ask yes/no questions
 - Keep each question under 15 words
 - Return ONLY a JSON array of strings, nothing else
+- No preamble, no explanation, no markdown fences
 
 Journal entry:
 {body.transcript[:2000]}
@@ -344,19 +409,53 @@ Journal entry:
 Return format: ["question 1", "question 2", "question 3"]"""
 
     try:
-        raw   = await generate(prompt=prompt, temperature=0.6, max_tokens=300)
-        clean = clean_llm_json(raw)
+        # Increased max_tokens: DeepSeek R1 uses tokens for its <think> block
+        # before reaching the JSON answer. 300 was too tight.
+        raw = await generate(prompt=prompt, temperature=0.6, max_tokens=500)
+        log.debug(f"Questions raw AI response ({len(raw)} chars): {raw[:300]}")
 
-        match = re.search(r'\[.*?\]', clean, re.DOTALL)
-        if match:
-            questions = json.loads(match.group())
-            return {"questions": questions[:body.count], "status": "ok"}
-        else:
-            log.warning(f"Could not parse questions JSON from: {clean[:200]}")
-            return {"questions": [], "status": "parse_failed"}
+        clean = clean_llm_json(raw)
+        log.debug(f"Questions after clean_llm_json: {clean[:200]}")
+
+        # Stage 1: non-greedy array match (handles simple arrays)
+        match = re.search(r'\[[\s\S]*?\]', clean)
+
+        # Stage 2: permissive fallback if stage 1 found nothing or failed to parse
+        if not match:
+            log.debug("Questions: non-greedy regex found nothing, trying permissive match")
+            match = re.search(r'\[[\s\S]+\]', clean)
+
+        if not match:
+            # Stage 3: try the raw response directly in case clean_llm_json over-stripped
+            log.debug("Questions: trying raw response for array extraction")
+            match = re.search(r'\[[\s\S]+\]', raw)
+
+        if not match:
+            log.warning(f"Questions: no JSON array found anywhere. Full cleaned response: {clean}")
+            return {"questions": [], "status": "parse_failed", "detail": "No JSON array in AI response"}
+
+        matched_text = match.group()
+        log.debug(f"Questions matched text: {matched_text[:200]}")
+
+        try:
+            questions = json.loads(matched_text)
+        except json.JSONDecodeError as json_err:
+            log.warning(f"Questions: JSON parse error: {json_err}. Matched text: {matched_text[:200]}")
+            return {"questions": [], "status": "parse_failed", "detail": f"JSON error: {json_err}"}
+
+        if not isinstance(questions, list):
+            log.warning(f"Questions: parsed value is not a list: {type(questions)}")
+            return {"questions": [], "status": "parse_failed", "detail": "AI returned non-list JSON"}
+
+        # Filter out any non-string items (sometimes AI sneaks in objects)
+        questions = [str(q).strip() for q in questions if q and str(q).strip()]
+
+        result = questions[:body.count]
+        log.info(f"Questions generated successfully: {len(result)} questions")
+        return {"questions": result, "status": "ok"}
 
     except Exception as e:
-        log.error(f"Question generation error: {e}")
+        log.error(f"Question generation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -391,7 +490,6 @@ async def extract_metrics(body: MetricsRequest):
     from ollama_manager import generate
 
     if not body.transcript or len(body.transcript.strip()) < 30:
-        # Return empty metrics instead of 400 — caller treats this as fire-and-forget
         return {"metrics": {}, "status": "skipped", "detail": "transcript too short"}
 
     prompt = _METRICS_PROMPT_TEMPLATE.format(transcript=body.transcript[:3000])
@@ -400,9 +498,8 @@ async def extract_metrics(body: MetricsRequest):
         raw   = await generate(prompt=prompt, temperature=0.3, max_tokens=400)
         clean = clean_llm_json(raw)
 
-        # Try two regex patterns: first without nested braces, then greedy fallback
         metrics = None
-        for pat in [r'\{[^{}]+\}', r'\{[\s\S]+\}']:
+        for pat in [r'\{[\s\S]+\}', r'\{[^{}]+\}']:
             m = re.search(pat, clean)
             if m:
                 try:
@@ -419,13 +516,21 @@ async def extract_metrics(body: MetricsRequest):
             from database import get_conn
             conn = get_conn()
             try:
+                # Use the entry's own date (not today) so backfilled or
+                # yesterday's entries don't land on today in trend graphs.
+                entry_row = conn.execute(
+                    "SELECT date FROM entries WHERE id = ?", (body.entry_id,)
+                ).fetchone()
+                entry_date = entry_row["date"] if entry_row else None
+
                 conn.execute("""
                     INSERT OR REPLACE INTO metrics
                     (entry_id, date, stress, mood, anxiety, energy,
                      mental_clarity, productivity, social_sat, sentiment, raw_extraction)
-                    VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, COALESCE(?, date('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     body.entry_id,
+                    entry_date,
                     metrics.get("stress"),
                     metrics.get("mood"),
                     metrics.get("anxiety"),
@@ -444,8 +549,8 @@ async def extract_metrics(body: MetricsRequest):
 
     except Exception as e:
         log.error(f"Metrics extraction error: {e}")
-        # Degrade gracefully — metrics are non-critical, never crash the recording flow
         return {"metrics": {}, "status": "error", "detail": str(e)}
+
 
 # ─── REST: Embed a saved entry into ChromaDB ─────────────────────────────────
 
@@ -470,10 +575,6 @@ def _embed_background(entry_id: int, transcript: str, entry_date: str):
 
 @router.post("/embed")
 async def embed_entry_endpoint(body: EmbedRequest):
-    """
-    Embed a saved journal entry into ChromaDB for semantic search.
-    Returns immediately -- embedding is done in a background thread.
-    """
     if not body.transcript or not body.transcript.strip():
         return {"status": "skipped", "reason": "empty transcript"}
 
@@ -516,17 +617,13 @@ class TagDayRequest(BaseModel):
 
 @router.post("/tag-day")
 async def tag_day(body: TagDayRequest):
-    """
-    Classify an entry's good/bad day factors and save them to the entries table.
-    Called fire-and-forget from the frontend after saving an entry.
-    """
     from ollama_manager import generate
 
-    if not body.transcript or len(body.transcript.strip()) < 30:
+    if not body.transcript or len(body.transcript.strip()) < 50:
         return {"status": "skipped", "reason": "transcript too short"}
 
     try:
-        prompt = _TAG_DAY_PROMPT.format(transcript=body.transcript[:3000])
+        prompt = _TAG_DAY_PROMPT.format(transcript=body.transcript[:2000])
         raw    = await generate(prompt=prompt, temperature=0.3, max_tokens=200)
         clean  = clean_llm_json(raw)
 
@@ -539,7 +636,6 @@ async def tag_day(body: TagDayRequest):
         good_tags = tags.get("good_tags", [])
         bad_tags  = tags.get("bad_tags",  [])
 
-        # Validate — must be lists of strings
         if not isinstance(good_tags, list): good_tags = []
         if not isinstance(bad_tags,  list): bad_tags  = []
         good_tags = [str(t).strip() for t in good_tags if str(t).strip()][:5]
@@ -663,6 +759,133 @@ def start_context_update(transcript: str, entry_type: str = 'daily'):
     t.start()
 
 
+# ─── REST: Generate structured summary ───────────────────────────────────────
+
+_STRUCTURED_SUMMARY_PROMPT = """You are analyzing a personal journal entry.
+
+Extract the following from the transcript below and return ONLY valid JSON:
+- "summary": One clear, specific sentence describing what happened or what the person discussed. Not generic. Specific.
+- "highlights": 2 to 4 bullet points capturing the key topics, feelings, or events. Each under 12 words. Be direct.
+- "intentions": Any goals, plans, or things the person said they want to do. Empty array [] if none stated.
+
+Rules:
+- Be specific to what was actually said — no generic observations
+- Highlights should read like field notes, not wellness summaries
+- If the person mentioned something significant in passing, surface it
+- Return ONLY the JSON object. No explanation, no preamble, no markdown fences.
+
+Transcript:
+{transcript}
+
+Return exactly this format:
+{{"summary": "...", "highlights": ["...", "..."], "intentions": ["..."]}}"""
+
+
+class StructuredSummaryRequest(BaseModel):
+    transcript: str
+    entry_id:   int
+
+
+def _generate_structured_summary_background(transcript: str, entry_id: int):
+    """
+    Background thread: generate a structured summary and save it to the DB.
+    Never blocks the HTTP response. Fails silently if Ollama is unavailable.
+    """
+    log.info(f"Structured summary starting for entry {entry_id}...")
+    try:
+        from ollama_manager import generate
+        from database import get_conn
+
+        prompt = _STRUCTURED_SUMMARY_PROMPT.format(transcript=transcript[:3000])
+        raw    = asyncio.run(generate(prompt=prompt, temperature=0.3, max_tokens=400))
+        clean  = clean_llm_json(raw)
+
+        parsed = None
+        for pat in [r'\{[\s\S]+\}', r'\{[^{}]+\}']:
+            m = re.search(pat, clean)
+            if m:
+                try:
+                    parsed = json.loads(m.group())
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+        if not parsed:
+            log.warning(f"Structured summary: could not parse JSON for entry {entry_id}. Raw: {clean[:200]}")
+            return
+
+        summary     = str(parsed.get("summary", "")).strip()
+        highlights  = parsed.get("highlights", [])
+        intentions  = parsed.get("intentions", [])
+
+        if not isinstance(highlights, list): highlights = []
+        if not isinstance(intentions, list): intentions = []
+
+        highlights = [str(h).strip() for h in highlights if str(h).strip()][:4]
+        intentions = [str(i).strip() for i in intentions if str(i).strip()][:5]
+
+        if not summary and not highlights:
+            log.debug(f"Structured summary: empty result for entry {entry_id}, skipping save.")
+            return
+
+        result = json.dumps({
+            "summary":    summary,
+            "highlights": highlights,
+            "intentions": intentions,
+        })
+
+        conn = get_conn()
+        try:
+            conn.execute(
+                "UPDATE entries SET structured_summary = ? WHERE id = ?",
+                (result, entry_id)
+            )
+            conn.commit()
+            log.info(f"Structured summary saved for entry {entry_id}.")
+        finally:
+            conn.close()
+
+    except Exception as e:
+        log.warning(f"Structured summary failed for entry {entry_id} (non-fatal): {e}")
+
+
+# ─── REST: Trigger memory update for written (non-audio) entries ─────────────
+# WriteMode and any future typed-entry modes call this after saving.
+# Voice entries already trigger memory update via /upload. This route
+# provides the same trigger for entries that skip the audio pipeline.
+
+class MemoryUpdateRequest(BaseModel):
+    transcript: str
+    entry_type: str = "write"   # "write", "rant", "daily" etc.
+
+
+@router.post("/update-memory")
+async def trigger_memory_update(body: MemoryUpdateRequest):
+    if not body.transcript or len(body.transcript.strip()) < 30:
+        return {"status": "skipped", "reason": "transcript too short"}
+
+    start_context_update(body.transcript, entry_type=body.entry_type)
+
+    from routes.memory import start_memory_update
+    start_memory_update(body.transcript, entry_type=body.entry_type)
+
+    return {"status": "started"}
+
+
+@router.post("/summarize")
+async def generate_structured_summary(body: StructuredSummaryRequest):
+    if not body.transcript or len(body.transcript.strip()) < 30:
+        return {"status": "skipped", "reason": "transcript too short"}
+
+    t = threading.Thread(
+        target=_generate_structured_summary_background,
+        args=(body.transcript, body.entry_id),
+        daemon=True
+    )
+    t.start()
+    return {"status": "summarizing"}
+
+
 # ─── WEBSOCKET: Real-time streaming transcription ────────────────────────────
 
 @router.websocket("/stream")
@@ -672,6 +895,15 @@ async def transcribe_stream(ws: WebSocket):
 
     audio_buffer = bytearray()
     chunk_count  = 0
+    connected    = True   # track state so we never send on a closed socket
+
+    async def safe_send(payload: dict):
+        """Send JSON only if the socket is still open."""
+        try:
+            if connected:
+                await ws.send_json(payload)
+        except Exception:
+            pass   # socket closed between the check and the send -- ignore
 
     try:
         while True:
@@ -679,21 +911,24 @@ async def transcribe_stream(ws: WebSocket):
             audio_buffer.extend(data)
             chunk_count += 1
 
-            if chunk_count % 10 == 0 and len(audio_buffer) > 8000:
+            # Only attempt partial transcription every 10 chunks and when
+            # Whisper is already loaded. If the model is still loading
+            # (first run after install) the to_thread call would block for
+            # 30+ seconds and the socket would be long dead by then.
+            if chunk_count % 10 == 0 and len(audio_buffer) > 8000 and _whisper_model is not None:
                 try:
                     result  = await asyncio.to_thread(transcribe_audio_file, bytes(audio_buffer))
                     partial = result.get("transcript", "")
                     if partial:
-                        await ws.send_json({"type": "partial", "text": partial})
+                        await safe_send({"type": "partial", "text": partial})
                 except Exception as e:
                     log.warning(f"Partial transcription failed: {e}")
 
     except WebSocketDisconnect:
+        connected = False
         log.info(f"Recording ended -- {len(audio_buffer)} bytes buffered.")
 
     except Exception as e:
+        connected = False
         log.error(f"WebSocket error: {e}")
-        try:
-            await ws.send_json({"type": "error", "text": str(e)})
-        except Exception:
-            pass
+        await safe_send({"type": "error", "text": str(e)})

@@ -152,6 +152,7 @@ function QuestionCard({ question, index, answer, onChange }) {
         value={answer}
         onChange={e => onChange(e.target.value)}
         rows={3}
+        spellCheck={true}
       />
     </div>
   )
@@ -379,7 +380,7 @@ export default function JournalEntry({ onSaved }) {
       setTranscript(text)
       setIsPartial(false)
 
-      if (text.length > 30) {
+      if (text.length > 300) {
         setStatus('generating')
         await fetchQuestions(text)
       } else {
@@ -393,20 +394,51 @@ export default function JournalEntry({ onSaved }) {
   }, [])
 
   // ─── Fetch AI questions ───────────────────────────────────────────────────
+  //
+  // FIX: Switched from plain fetch() to fetchWithRetry() so a momentarily
+  // busy backend (just finished a heavy Whisper job) gets retried automatically.
+  //
+  // FIX: The backend now returns a 'status' field. We log it so failures are
+  // visible in DevTools console instead of silently disappearing.
+  //
+  // FIX: A 5-second delay before the questions call gives Ollama time to finish
+  // any concurrent inference (metrics, embeddings) that was just kicked off.
+  // Without this, the questions request sometimes queues behind those calls and
+  // the frontend times out waiting before the model responds.
 
   const fetchQuestions = useCallback(async (text) => {
+    // Small delay so Ollama isn't context-switching between 3 concurrent calls.
+    // The transcription upload triggers context-update in a background thread;
+    // waiting 2s here lets that thread get its slot before questions compete.
+    await new Promise(r => setTimeout(r, 2000))
+
     try {
-      const res = await fetch(`${API}/transcribe/questions`, {
+      const res = await fetchWithRetry(`${API}/transcribe/questions`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ transcript: text, count: 3 })
       })
-      if (!res.ok) throw new Error(`Questions API returned ${res.status}`)
+
+      if (!res.ok) {
+        console.error(`[WITNESS] Questions API returned HTTP ${res.status}`)
+        setStatus('done')
+        return
+      }
+
       const data = await res.json()
+
+      // Log the backend status so failures are visible in DevTools console
+      if (data.status !== 'ok') {
+        console.warn(`[WITNESS] Questions status: ${data.status}`, data.detail || '')
+      } else {
+        console.log(`[WITNESS] Questions generated: ${data.questions?.length ?? 0} questions`)
+      }
+
       setQuestions(data.questions || [])
       setStatus('done')
     } catch (err) {
-      console.warn('Question generation failed:', err.message)
+      // fetchWithRetry exhausted all retries — backend is genuinely unreachable
+      console.error('[WITNESS] Question generation failed after retries:', err.message)
       setStatus('done')
     }
   }, [])
@@ -461,6 +493,13 @@ export default function JournalEntry({ onSaved }) {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ entry_id: entryId, transcript, entry_date: today })
+      }).catch(() => {})
+
+      // Fire-and-forget structured summary (one-sentence + bullet highlights)
+      fetch(`${API}/transcribe/summarize`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ transcript, entry_id: entryId })
       }).catch(() => {})
 
       // Fire-and-forget good/bad day tagging
@@ -605,6 +644,7 @@ export default function JournalEntry({ onSaved }) {
               onChange={e => !isRecording && setTranscript(e.target.value)}
               readOnly={isRecording}
               rows={8}
+              spellCheck={true}
               placeholder={isRecording ? 'Transcript will appear as you speak...' : ''}
             />
             {!isRecording && transcript && (

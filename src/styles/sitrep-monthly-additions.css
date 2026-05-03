@@ -1,0 +1,71 @@
+/* ═══════════════════════════════════════════════════════════════════
+   STEP 3 ADDITIONS — Monthly Recap CSS
+   Append this entire block to the bottom of your globals.css
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── TAB TOGGLE ──────────────────────────────────────────────────── */
+
+.sr-tab-toggle {
+  display: flex;
+  border: 1px solid #2a2a2a;
+}
+
+.sr-tab-btn {
+  padding: 7px 18px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #606060;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  text-transform: uppercase;
+}
+
+.sr-tab-btn:first-child {
+  border-right: 1px solid #2a2a2a;
+}
+
+.sr-tab-btn:hover {
+  color: #a09080;
+  background: #1e1e1e;
+}
+
+.sr-tab-btn.active {
+  color: #f5a830;
+  background: rgba(245,168,48,0.08);
+}
+
+/* ── TAB-LEVEL ACTIONS ROW ───────────────────────────────────────── */
+
+.sr-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+/* ── TREND BADGE ─────────────────────────────────────────────────── */
+
+.sr-trend-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  opacity: 0.9;
+}
+
+/* ── COMPARE BAR LEGEND ──────────────────────────────────────────── */
+
+.sr-compare-legend {
+  display: flex;
+  gap: 16px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #606060;
+  margin-bottom: 12px;
+}

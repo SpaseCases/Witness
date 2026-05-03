@@ -1,0 +1,250 @@
+/* ═══════════════════════════════════════════════════════════════════
+   WITNESS — Memory Screen Styles (patched)
+   Save at: witness/src/styles/memory.css  (replace the existing file)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── MEMORY SCREEN LAYOUT ────────────────────────────────────────── */
+
+.memory-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.mem-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* ── STATS ROW ───────────────────────────────────────────────────── */
+
+.mem-stats-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: #505050;
+}
+
+.mem-stat     { color: #a09080; }
+.mem-stat-sep { color: #383838; }
+
+/* ── SECTION BLOCKS ──────────────────────────────────────────────── */
+
+.mem-doc-block,
+.mem-facts-block,
+.mem-explainer-block,
+.mem-danger-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mem-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* ── MEMORY DOCUMENT TEXT ────────────────────────────────────────── */
+
+.mem-doc-text {
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.85;
+  color: #d8cfc4;
+  background: #181818;
+  border: 1px solid #2a2a2a;
+  padding: 18px 20px;
+  white-space: pre-wrap;
+}
+
+.mem-doc-hint {
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 1px;
+  color: #404040;
+  text-transform: uppercase;
+}
+
+/* ── EMPTY STATE — memory document (bordered box) ────────────────── */
+
+.mem-empty-state {
+  background: #181818;
+  border: 1px solid #242424;
+  border-left: 3px solid #2a2a2a;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── EMPTY STATE — facts (no box, just text; avoids the broken look) */
+
+.mem-facts-empty {
+  padding: 4px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mem-empty-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #505050;
+}
+
+.mem-empty-sub {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 1px;
+  color: #404040;
+  line-height: 1.7;
+}
+
+/* ── FACT CARDS ──────────────────────────────────────────────────── */
+
+.mem-facts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 6px;
+}
+
+.mem-fact-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  background: #191919;
+  border: 1px solid #2a2a2a;
+  border-left: 2px solid rgba(245, 168, 48, 0.3);
+  padding: 12px 14px;
+  transition: border-color 0.15s;
+}
+
+.mem-fact-card:hover {
+  border-left-color: rgba(245, 168, 48, 0.6);
+}
+
+.mem-fact-text {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: #a09080;
+  flex: 1;
+}
+
+.mem-fact-dismiss {
+  font-size: 10px;
+  color: #404040;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 2px;
+  transition: color 0.15s;
+}
+
+.mem-fact-dismiss:hover {
+  color: #e05050;
+}
+
+/* ── HOW IT WORKS ────────────────────────────────────────────────── */
+
+.mem-explainer-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.mem-explainer-card {
+  background: #181818;
+  border: 1px solid #242424;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mem-explainer-num {
+  font-family: var(--font-display);
+  font-size: 28px;
+  color: rgba(245, 168, 48, 0.3);
+  line-height: 1;
+}
+
+.mem-explainer-title {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 2px;
+  color: #a09080;
+}
+
+.mem-explainer-text {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.7;
+  color: #606060;
+}
+
+/* ── DANGER ZONE ─────────────────────────────────────────────────── */
+
+.mem-danger-block {
+  border-top: 1px solid #242424;
+  padding-top: 20px;
+  margin-top: 8px;
+}
+
+.mem-danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  background: rgba(192, 64, 64, 0.06);
+  border: 1px solid rgba(224, 80, 80, 0.2);
+  padding: 16px 18px;
+}
+
+.mem-danger-title {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #e05050;
+  margin-bottom: 4px;
+}
+
+.mem-danger-sub {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.5px;
+  color: #606060;
+  line-height: 1.6;
+}
+
+.mem-danger-btn {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #e05050;
+  background: transparent;
+  border: 1px solid rgba(224, 80, 80, 0.4);
+  padding: 9px 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.mem-danger-btn:hover {
+  background: rgba(224, 80, 80, 0.1);
+  border-color: #e05050;
+}
