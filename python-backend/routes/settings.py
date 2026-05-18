@@ -1,3 +1,5 @@
+# Removed: generate-context endpoint and profile-preview endpoint
+#           (Personal Profile section deleted from Settings — Memory screen replaces it).
 """
 WITNESS -- Settings API  (Step 15)
 Read and write app configuration.
@@ -13,8 +15,8 @@ import json
 import httpx
 import logging
 import platform
+import re
 import subprocess
-import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -44,9 +46,11 @@ _hw_cache: dict | None = None   # None = not yet detected
 
 def _detect_hardware() -> dict:
     """
-    Detect GPU, VRAM, RAM, CPU, OS on Windows.
+    Detect GPU, VRAM, RAM, CPU, OS.
     Result is cached for the entire app session (hardware doesn't change).
-    Falls back from wmic -> PowerShell -> None for VRAM.
+
+    Windows: wmic -> PowerShell for GPU/VRAM (with AMD RDNA spec-table override).
+    Linux:   nvidia-smi -> lspci -> /sys/class/drm for GPU/VRAM.
     Never raises.
     """
     global _hw_cache
@@ -80,76 +84,142 @@ def _detect_hardware() -> dict:
     except Exception as e:
         log.warning(f"Hardware detect: OS failed: {e}")
 
-    # ── GPU name + VRAM: try wmic first, PowerShell as fallback ──────────────
+    # ── GPU name + VRAM: platform-specific detection ─────────────────────────
     gpu_name  = None
     vram_gb   = None
 
-    # Method 1: wmic (fast, but misreports AMD VRAM as 0 on some systems)
-    try:
-        result = subprocess.run(
-            ["wmic", "path", "win32_videocontroller", "get", "Name,AdapterRAM", "/format:csv"],
-            capture_output=True, text=True, timeout=5
-        )
-        lines = [l.strip() for l in result.stdout.splitlines()
-                 if l.strip() and "Node" not in l]
-        best_vram = 0.0
-        best_name = None
-        for line in lines:
-            parts = line.split(",")
-            if len(parts) >= 3:
-                try:
-                    vram_bytes = int(parts[1])
-                    name       = parts[2].strip()
-                    vb         = round(vram_bytes / (1024 ** 3), 1)
-                    if vb > best_vram:
-                        best_vram = vb
-                        best_name = name
-                except (ValueError, IndexError):
-                    continue
-        if best_name:
-            gpu_name = best_name
-            vram_gb  = best_vram if best_vram > 0 else None
-    except Exception as e:
-        log.warning(f"Hardware detect: wmic GPU failed: {e}")
+    if platform.system() == "Windows":
+        # Method 1: wmic (fast, but misreports AMD VRAM as 0 on some systems)
+        try:
+            result = subprocess.run(
+                ["wmic", "path", "win32_videocontroller", "get", "Name,AdapterRAM", "/format:csv"],
+                capture_output=True, text=True, timeout=5
+            )
+            lines = [l.strip() for l in result.stdout.splitlines()
+                     if l.strip() and "Node" not in l]
+            best_vram = 0.0
+            best_name = None
+            for line in lines:
+                parts = line.split(",")
+                if len(parts) >= 3:
+                    try:
+                        vram_bytes = int(parts[1])
+                        name       = parts[2].strip()
+                        vb         = round(vram_bytes / (1024 ** 3), 1)
+                        if vb > best_vram:
+                            best_vram = vb
+                            best_name = name
+                    except (ValueError, IndexError):
+                        continue
+            if best_name:
+                gpu_name = best_name
+                vram_gb  = best_vram if best_vram > 0 else None
+        except Exception as e:
+            log.warning(f"Hardware detect: wmic GPU failed: {e}")
 
-    # Method 2: PowerShell fallback
-    # Windows has a well-known bug where AMD AdapterRAM is reported as a garbage
-    # low value (e.g. 4GB on a 16GB card) or 0. Run PowerShell regardless and
-    # take the higher of the two readings.
-    try:
-        ps_cmd = (
-            "Get-WmiObject Win32_VideoController | "
-            "Select-Object Name, AdapterRAM | "
-            "ConvertTo-Json"
-        )
-        result = subprocess.run(
-            ["powershell", "-NonInteractive", "-Command", ps_cmd],
-            capture_output=True, text=True, timeout=8
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            raw = result.stdout.strip()
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                data = [data]
-            ps_best_vram = 0.0
-            ps_best_name = None
-            for entry in data:
-                try:
-                    vram_bytes = int(entry.get("AdapterRAM") or 0)
-                    name       = (entry.get("Name") or "").strip()
-                    vb         = round(vram_bytes / (1024 ** 3), 1)
-                    if vb > ps_best_vram:
-                        ps_best_vram = vb
-                        ps_best_name = name
-                except (ValueError, TypeError):
-                    continue
-            if ps_best_name and not gpu_name:
-                gpu_name = ps_best_name
-            # Take whichever is higher — PowerShell or wmic
-            if ps_best_vram > (vram_gb or 0):
-                vram_gb = ps_best_vram
-    except Exception as e:
-        log.warning(f"Hardware detect: PowerShell GPU fallback failed: {e}")
+        # Method 2: PowerShell fallback
+        # Windows has a well-known bug where AMD AdapterRAM is reported as a garbage
+        # low value (e.g. 4GB on a 16GB card) or 0. Run PowerShell regardless and
+        # take the higher of the two readings.
+        try:
+            ps_cmd = (
+                "Get-WmiObject Win32_VideoController | "
+                "Select-Object Name, AdapterRAM | "
+                "ConvertTo-Json"
+            )
+            result = subprocess.run(
+                ["powershell", "-NonInteractive", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=8
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                raw = result.stdout.strip()
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data = [data]
+                ps_best_vram = 0.0
+                ps_best_name = None
+                for entry in data:
+                    try:
+                        vram_bytes = int(entry.get("AdapterRAM") or 0)
+                        name       = (entry.get("Name") or "").strip()
+                        vb         = round(vram_bytes / (1024 ** 3), 1)
+                        if vb > ps_best_vram:
+                            ps_best_vram = vb
+                            ps_best_name = name
+                    except (ValueError, TypeError):
+                        continue
+                if ps_best_name and not gpu_name:
+                    gpu_name = ps_best_name
+                # Take whichever is higher — PowerShell or wmic
+                if ps_best_vram > (vram_gb or 0):
+                    vram_gb = ps_best_vram
+        except Exception as e:
+            log.warning(f"Hardware detect: PowerShell GPU fallback failed: {e}")
+
+    else:
+        # Linux (and Mac): try nvidia-smi first, then lspci, then /sys
+        # nvidia-smi — works on any system with an NVIDIA GPU + driver
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # First line is the primary GPU
+                first = result.stdout.strip().splitlines()[0]
+                parts = [p.strip() for p in first.split(",")]
+                if len(parts) >= 2:
+                    gpu_name = parts[0]
+                    try:
+                        vram_gb = round(int(parts[1]) / 1024, 1)  # MiB -> GiB
+                    except ValueError:
+                        pass
+                log.info(f"Hardware detect: nvidia-smi found {gpu_name}, {vram_gb}GB")
+        except FileNotFoundError:
+            pass  # nvidia-smi not installed — not an NVIDIA system
+        except Exception as e:
+            log.warning(f"Hardware detect: nvidia-smi failed: {e}")
+
+        # lspci — fallback for AMD/Intel GPUs; gives name but not VRAM
+        if not gpu_name:
+            try:
+                result = subprocess.run(
+                    ["lspci", "-mm"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.splitlines():
+                        ll = line.lower()
+                        if "vga" in ll or "3d" in ll or "display" in ll:
+                            # lspci -mm format: slot "class" "vendor" "device" ...
+                            # Extract quoted fields
+                            fields = re.findall(r'"([^"]*)"', line)
+                            if len(fields) >= 3:
+                                gpu_name = f"{fields[1]} {fields[2]}".strip()
+                            break
+            except FileNotFoundError:
+                pass  # lspci not installed
+            except Exception as e:
+                log.warning(f"Hardware detect: lspci failed: {e}")
+
+        # /sys/class/drm — AMD VRAM on Linux via sysfs (works without root)
+        if gpu_name and vram_gb is None:
+            try:
+                import glob
+                vram_paths = glob.glob("/sys/class/drm/card*/device/mem_info_vram_total")
+                if vram_paths:
+                    best = 0
+                    for vp in vram_paths:
+                        with open(vp) as f:
+                            val = int(f.read().strip())
+                        if val > best:
+                            best = val
+                    if best > 0:
+                        vram_gb = round(best / (1024 ** 3), 1)
+                        log.info(f"Hardware detect: sysfs VRAM = {vram_gb}GB")
+            except Exception as e:
+                log.warning(f"Hardware detect: sysfs VRAM failed: {e}")
 
     # ── AMD/Radeon heuristic override ─────────────────────────────────────────
     # Windows consistently mis-reads VRAM on AMD RDNA cards (RX 5000/6000/7000).
@@ -289,7 +359,7 @@ def _classify_model(model_name: str, vram_gb: float | None) -> tuple[str, str]:
 
 _CATALOG = [
     # ── TIER 1 — ULTRA LIGHT ──────────────────────────────────────────────────
-    # Verified against ollama.com/library tags, April 2026.
+    # Verified against ollama.com/library tags, May 2026.
     {
         "name":             "gemma4:e2b",
         # ollama.com/library/gemma4/tags: e2b = 7.2GB, 128K ctx, Text+Image
@@ -626,103 +696,6 @@ async def pull_model(body: PullRequest):
 
 
 
-# ─── AUTO-GENERATE CONTEXT DOCUMENT ─────────────────────────────────────────
-#
-# Pulls all journal entries from SQLite, sends them to Ollama, and asks it
-# to write a concise personal context document. Result is written directly
-# into the user_profile setting. The frontend polls or awaits the response.
-#
-# This is a synchronous (awaited) endpoint — the frontend shows a loading
-# state and the response contains the generated text. The user can edit it
-# after generation.
-
-_GENERATE_CONTEXT_PROMPT = """You are reading someone's private journal entries to write a personal context document for an AI assistant.
-
-Read all the entries below and write a concise personal context document about this person.
-
-Rules:
-- 3 to 5 sentences maximum
-- First person ("I am...", "I work...", "I tend to...")
-- Cover: who they are, what they do, recurring themes or stressors, goals or patterns you noticed
-- Be specific — use real details from the entries, not generic observations
-- Do not use lists or bullet points — write in flowing prose
-- Do not mention that this was generated from journal entries
-- If there is not enough data yet, write a brief honest placeholder
-
-Journal entries (oldest to newest):
-{entries}
-
-Write the context document now. Return ONLY the document text — no explanation, no preamble, no quotes."""
-
-
-@router.post("/generate-context")
-async def generate_context_document():
-    """
-    Pull all journal entries, send to Ollama, write a personal context document.
-    Returns the generated text so the frontend can display it immediately.
-    Also saves it to the user_profile setting.
-    """
-    from ollama_manager import generate
-
-    # Fetch all entries from SQLite, oldest first
-    conn = get_conn()
-    try:
-        rows = conn.execute("""
-            SELECT date, type, transcript
-            FROM entries
-            WHERE transcript IS NOT NULL AND LENGTH(TRIM(transcript)) > 20
-            ORDER BY date ASC, id ASC
-            LIMIT 60
-        """).fetchall()
-    finally:
-        conn.close()
-
-    if not rows:
-        raise HTTPException(
-            status_code=400,
-            detail="No journal entries found. Record at least a few entries before generating a context document."
-        )
-
-    # Format entries for the prompt — keep it compact to fit in context
-    entry_blocks = []
-    for row in rows:
-        date_str  = row["date"] or "unknown date"
-        type_str  = row["type"] or "entry"
-        text      = (row["transcript"] or "").strip()
-        if len(text) > 800:
-            text = text[:800] + "..."
-        label = "ENTRY" if type_str == "daily" else type_str.upper()
-        entry_blocks.append(f"[{date_str} — {label}]\n{text}")
-
-    entries_text = "\n\n".join(entry_blocks)
-    prompt       = _GENERATE_CONTEXT_PROMPT.format(entries=entries_text)
-
-    log.info(f"Generating context document from {len(rows)} entries...")
-
-    try:
-        raw = await generate(prompt=prompt, temperature=0.4, max_tokens=400)
-
-        # Strip think blocks (DeepSeek R1) and any markdown
-        import re
-        text = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
-        text = re.sub(r'```.*?```', '', text, flags=re.DOTALL).strip()
-        text = text.strip('"').strip()
-
-        if not text or len(text) < 20:
-            raise HTTPException(status_code=500, detail="AI returned an empty response. Try again.")
-
-        # Save to settings
-        set_setting("user_profile", text)
-        log.info(f"Context document generated and saved ({len(text)} chars).")
-
-        return {"status": "ok", "profile": text, "entry_count": len(rows)}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.error(f"Context generation failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
-
 # ─── WIPE ENDPOINTS ──────────────────────────────────────────────────────────
 
 @router.post("/wipe-entries")
@@ -766,7 +739,6 @@ def wipe_all():
             "notify_enabled":           "1",
             "theme_accent":             "amber",
             "health_watch_path":        "",
-            "user_profile":             "",
             "question_pool":            "[]",
             "onboarded":                "0",
             "warmup_on_start":          "1",
@@ -799,16 +771,6 @@ def get_all_settings():
         return {r["key"]: r["value"] for r in rows}
     finally:
         conn.close()
-
-
-@router.get("/profile-preview")
-def get_profile_preview():
-    profile = get_setting("user_profile", "")
-    return {
-        "profile": profile,
-        "length":  len(profile),
-        "empty":   len(profile.strip()) == 0,
-    }
 
 
 @router.get("/{key}")

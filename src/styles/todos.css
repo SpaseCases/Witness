@@ -785,3 +785,66 @@
   border-color: rgba(245, 168, 48, 0.35) !important;
   background: rgba(245, 168, 48, 0.04) !important;
 }
+
+/* ── DUE DATE BADGES ─────────────────────────────────────────────────────── */
+
+.todo-due-badge {
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  letter-spacing: 1.5px;
+  padding: 2px 7px;
+  border: 1px solid currentColor;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.todo-due-normal  { color: #505050; }
+.todo-due-soon    { color: #f5a830; }
+.todo-due-urgent  { color: #e05050; }
+
+/* ── DUE DATE PICKER (detail view) ──────────────────────────────────────── */
+
+.todos-detail-due-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  flex-shrink: 0;
+}
+
+.todo-date-input {
+  background: #181818;
+  border: 1px solid #2a2a2a;
+  color: #a09080;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 5px 8px;
+  border-radius: 0;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.todo-date-input:focus { border-color: var(--accent); }
+
+.todo-date-input::-webkit-calendar-picker-indicator {
+  filter: invert(0.5);
+  cursor: pointer;
+}
+
+.todos-clear-due-btn {
+  background: transparent;
+  border: 1px solid #2a2a2a;
+  color: #505050;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  padding: 4px 9px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.todos-clear-due-btn:hover {
+  color: #e05050;
+  border-color: #e05050;
+}

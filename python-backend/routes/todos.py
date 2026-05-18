@@ -1,3 +1,8 @@
+# Bug fix: datetime import added; due_date format validated (YYYY-MM-DD) in
+#          create_todo and update_todo — previously any string was accepted,
+#          silently breaking cleanup_expired_todos() date comparisons.
+# Updated: Step 8 — added due_date to TodoCreate/TodoUpdate, cleanup_expired_todos(),
+#          GET /todos/cleanup endpoint, PATCH saves due_date.
 """
 WITNESS — To-Do API
 CRUD operations for the todos table.
@@ -5,15 +10,17 @@ CRUD operations for the todos table.
 Endpoints:
   GET    /todos/              — list all todos (newest first)
   POST   /todos/              — create a new task
-  PATCH  /todos/{id}          — update done, text, or append a note
+  PATCH  /todos/{id}          — update done, text, due_date, or append a note
   DELETE /todos/bulk          — bulk delete multiple tasks
   DELETE /todos/{id}          — delete a task
   DELETE /todos/{id}/note/{i} — delete one note from a todo
   GET    /todos/{id}/detail   — full detail: todo + all source entry data
+  GET    /todos/cleanup       — delete expired todos (due_date < today, not done)
 """
 
 import logging
 import json
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -31,12 +38,14 @@ class TodoCreate(BaseModel):
     text:            str
     source_entry_id: Optional[int] = None
     source_date:     Optional[str] = None
+    due_date:        Optional[str] = None
 
 
 class TodoUpdate(BaseModel):
     done:        Optional[bool] = None
     text:        Optional[str]  = None
     append_note: Optional[str]  = None   # adds a note string to the notes JSON array
+    due_date:    Optional[str]  = None   # YYYY-MM-DD or empty string to clear
 
 
 class BulkDeleteBody(BaseModel):
@@ -53,6 +62,26 @@ def _row_to_dict(row) -> dict:
     except Exception:
         d["notes"] = []
     return d
+
+
+def cleanup_expired_todos() -> int:
+    """
+    Delete todos where due_date < today and done = 0.
+    Returns the number of rows deleted.
+    Called at startup and hourly.
+    """
+    conn = get_conn()
+    try:
+        result = conn.execute(
+            "DELETE FROM todos WHERE due_date IS NOT NULL AND due_date < date('now') AND done = 0"
+        )
+        conn.commit()
+        count = result.rowcount
+        if count:
+            log.info(f"cleanup_expired_todos: deleted {count} overdue task(s).")
+        return count
+    finally:
+        conn.close()
 
 
 # ─── ROUTES ──────────────────────────────────────────────────────────────────
@@ -84,12 +113,20 @@ def create_todo(body: TodoCreate):
     if not text:
         raise HTTPException(status_code=400, detail="Task text cannot be empty")
 
+    due_date = None
+    if body.due_date and body.due_date.strip():
+        try:
+            datetime.strptime(body.due_date.strip(), "%Y-%m-%d")
+            due_date = body.due_date.strip()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="due_date must be YYYY-MM-DD format")
+
     conn = get_conn()
     try:
         cur = conn.execute("""
-            INSERT INTO todos (text, source_entry_id, source_date, notes, is_project)
-            VALUES (?, ?, ?, '[]', 0)
-        """, (text, body.source_entry_id, body.source_date))
+            INSERT INTO todos (text, source_entry_id, source_date, notes, is_project, due_date)
+            VALUES (?, ?, ?, '[]', 0, ?)
+        """, (text, body.source_entry_id, body.source_date, due_date))
         conn.commit()
         row = conn.execute("SELECT * FROM todos WHERE id = ?", (cur.lastrowid,)).fetchone()
         return _row_to_dict(row)
@@ -142,11 +179,30 @@ def update_todo(todo_id: int, body: TodoUpdate):
                     (json.dumps(notes), todo_id)
                 )
 
+        if body.due_date is not None:
+            # Empty string = clear the due date; valid YYYY-MM-DD = set it
+            if body.due_date.strip():
+                try:
+                    datetime.strptime(body.due_date.strip(), "%Y-%m-%d")
+                    new_due = body.due_date.strip()
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="due_date must be YYYY-MM-DD format")
+            else:
+                new_due = None
+            conn.execute("UPDATE todos SET due_date = ? WHERE id = ?", (new_due, todo_id))
+
         conn.commit()
         row = conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
         return _row_to_dict(row)
     finally:
         conn.close()
+
+
+@router.get("/cleanup")
+def run_cleanup():
+    """Manually trigger expired todo cleanup. Returns count deleted."""
+    count = cleanup_expired_todos()
+    return {"deleted": count, "status": "ok"}
 
 
 @router.delete("/bulk")

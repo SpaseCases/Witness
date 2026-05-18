@@ -1,9 +1,11 @@
 /* ═══════════════════════════════════════════════════════════════════
-   WITNESS — Memory Screen Styles (patched)
-   Save at: witness/src/styles/memory.css  (replace the existing file)
+   WITNESS — Memory Screen Styles
+   Merged with Profile styles — profile.css is deleted, all pf-*
+   rules now live here.
+   Save at: witness/src/styles/memory.css
    ═══════════════════════════════════════════════════════════════════ */
 
-/* ── MEMORY SCREEN LAYOUT ────────────────────────────────────────── */
+/* ── SCREEN LAYOUT ───────────────────────────────────────────────── */
 
 .memory-screen {
   display: flex;
@@ -17,33 +19,46 @@
   padding: 24px 28px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 28px;
 }
 
-/* ── STATS ROW ───────────────────────────────────────────────────── */
+/* ── HEADER RIGHT — stats above buttons ──────────────────────────── */
+/*
+  The global .page-header-right is column + align-end by default.
+  We need two sub-rows inside it:
+    Row 1: stat chips (entries · facts · updated)
+    Row 2: stale badge + regen btn + rebuild btn
+*/
 
-.mem-stats-row {
+.mem-header-stats {
   display: flex;
   align-items: center;
   gap: 8px;
   font-family: var(--font-mono);
   font-size: 8px;
   letter-spacing: 1.5px;
-  color: #505050;
 }
 
 .mem-stat     { color: #a09080; }
 .mem-stat-sep { color: #383838; }
 
+.mem-header-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
 /* ── SECTION BLOCKS ──────────────────────────────────────────────── */
 
 .mem-doc-block,
 .mem-facts-block,
+.mem-profile-block,
 .mem-explainer-block,
 .mem-danger-block {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .mem-section-header {
@@ -51,6 +66,14 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+}
+
+/* Divider between major sections */
+.mem-facts-block,
+.mem-profile-block,
+.mem-explainer-block {
+  padding-top: 4px;
+  border-top: 1px solid #242424;
 }
 
 /* ── MEMORY DOCUMENT TEXT ────────────────────────────────────────── */
@@ -62,6 +85,7 @@
   color: #d8cfc4;
   background: #181818;
   border: 1px solid #2a2a2a;
+  border-left: 3px solid rgba(245, 168, 48, 0.35);
   padding: 18px 20px;
   white-space: pre-wrap;
 }
@@ -74,7 +98,7 @@
   text-transform: uppercase;
 }
 
-/* ── EMPTY STATE — memory document (bordered box) ────────────────── */
+/* ── EMPTY STATES ────────────────────────────────────────────────── */
 
 .mem-empty-state {
   background: #181818;
@@ -85,8 +109,6 @@
   flex-direction: column;
   gap: 8px;
 }
-
-/* ── EMPTY STATE — facts (no box, just text; avoids the broken look) */
 
 .mem-facts-empty {
   padding: 4px 0 12px;
@@ -114,8 +136,8 @@
 
 .mem-facts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
 }
 
 .mem-fact-card {
@@ -125,19 +147,19 @@
   gap: 12px;
   background: #191919;
   border: 1px solid #2a2a2a;
-  border-left: 2px solid rgba(245, 168, 48, 0.3);
-  padding: 12px 14px;
-  transition: border-color 0.15s;
+  border-top: 2px solid rgba(245, 168, 48, 0.25);
+  padding: 14px 16px;
+  transition: border-top-color 0.15s;
 }
 
 .mem-fact-card:hover {
-  border-left-color: rgba(245, 168, 48, 0.6);
+  border-top-color: rgba(245, 168, 48, 0.55);
 }
 
 .mem-fact-text {
   font-family: var(--font-mono);
   font-size: 10.5px;
-  line-height: 1.6;
+  line-height: 1.75;
   color: #a09080;
   flex: 1;
 }
@@ -155,9 +177,7 @@
   transition: color 0.15s;
 }
 
-.mem-fact-dismiss:hover {
-  color: #e05050;
-}
+.mem-fact-dismiss:hover { color: #e05050; }
 
 /* ── HOW IT WORKS ────────────────────────────────────────────────── */
 
@@ -202,7 +222,7 @@
 .mem-danger-block {
   border-top: 1px solid #242424;
   padding-top: 20px;
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .mem-danger-row {
@@ -247,4 +267,209 @@
 .mem-danger-btn:hover {
   background: rgba(224, 80, 80, 0.1);
   border-color: #e05050;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SELF-MODEL (Profile) — pf-* classes merged from profile.css
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── HEADER BUTTONS ──────────────────────────────────────────────── */
+
+.pf-stale-badge {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: var(--accent-bright);
+  background: var(--accent-dim);
+  border: 1px solid rgba(245, 168, 48, 0.35);
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.pf-regen-btn {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 7px 16px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.pf-regen-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-bright);
+}
+
+.pf-regen-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── GENERATING STATE ────────────────────────────────────────────── */
+
+.pf-generating {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 40px;
+  text-align: center;
+}
+
+.pf-gen-glyph {
+  font-size: 48px;
+  color: var(--accent-bright);
+  margin-bottom: 24px;
+  line-height: 1;
+  display: inline-block;
+}
+
+.pf-gen-title {
+  font-family: var(--font-display);
+  font-size: 24px;
+  letter-spacing: 5px;
+  color: var(--text-primary);
+  margin-bottom: 14px;
+}
+
+.pf-gen-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  line-height: 1.8;
+  max-width: 420px;
+}
+
+/* ── SUMMARY BLOCK ───────────────────────────────────────────────── */
+
+.pf-summary-block {
+  margin-bottom: 20px;
+  padding: 20px 22px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-dim);
+  border-left: 3px solid var(--accent-bright);
+}
+
+.pf-summary-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 3px;
+  color: var(--accent-bright);
+  margin-bottom: 12px;
+}
+
+.pf-summary-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
+  line-height: 1.9;
+}
+
+/* ── 2x2 GRID ────────────────────────────────────────────────────── */
+
+.pf-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+/* ── SECTION CARD ────────────────────────────────────────────────── */
+
+.pf-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-dim);
+  border-left: 3px solid var(--border); /* overridden inline per section */
+  padding: 18px 20px;
+}
+
+.pf-section-title {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 3px;
+  margin-bottom: 14px;
+  /* color overridden inline per section */
+}
+
+/* ── TAG LIST ────────────────────────────────────────────────────── */
+
+.pf-tag-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.pf-tag-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.pf-tag-bullet {
+  font-size: 7px;
+  flex-shrink: 0;
+  margin-top: 3px;
+  line-height: 1;
+}
+
+.pf-tag-text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.pf-empty-list {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── PROFILE META (generated from X entries · date) ──────────────── */
+
+.mem-profile-meta {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: #505050;
+  padding-top: 12px;
+  border-top: 1px solid #242424;
+  margin-top: 4px;
+}
+
+/* ── ANIMATION ───────────────────────────────────────────────────── */
+
+@keyframes pf-fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pf-rotate {
+  to { transform: rotate(360deg); }
+}
+
+/* opacity:0 initial state is safe — CSS forwards fill always resolves,
+   unlike gsap.from() which can get stuck at opacity:0 in Electron. */
+.pf-anim-in {
+  opacity: 0;
+  animation: pf-fade-up 0.4s ease-out forwards;
+}
+
+/* Spinning glyph for GeneratingState */
+.pf-spin {
+  display: inline-block;
+  animation: pf-rotate 3s linear infinite;
 }

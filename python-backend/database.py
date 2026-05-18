@@ -1,25 +1,10 @@
+# Bug fix: migration ordering (settings table before _migrate_rants), added structured_summary
+#          to CREATE TABLE, added missing indexes (qa_pairs, flags, todos, chat_threads),
+#          added error handling to get_setting/set_setting.
 """
 WITNESS -- Database Layer
 SQLite via Python's built-in sqlite3.
 All tables created here on first run.
-
-Step 4 additions:
-  - user_profile table: stores longitudinal self-model snapshots generated
-    by /profile/generate. Multiple rows can exist; the API returns the newest.
-  - Safe: IF NOT EXISTS guarantees no crash on existing databases.
-
-Bug 2 fix:
-  - Added 'tags' TEXT column (DEFAULT '[]') to the entries table.
-    This is where rant topic tags are stored going forward.
-  - Safe migration: on every startup, checks if the column already exists
-    before attempting ALTER TABLE. Will never crash on an existing database.
-  - Marks rants as migrated via the 'rants_migrated' settings key so the
-    one-time migration only runs once.
-
-Step 6 additions:
-  - todos table gains 'notes' TEXT column (JSON array of appended notes)
-  - todos table gains 'is_project' INTEGER column (0=task, 1=project)
-  - Safe migrations for both new columns on existing databases.
 """
 
 import sqlite3
@@ -71,24 +56,36 @@ def init_db():
     try:
         c = conn.cursor()
 
-        # ── JOURNAL ENTRIES ──────────────────────────────────────────────────
+        # ── SETTINGS must come FIRST so _migrate_rants can write to it ────────
         c.execute("""
-            CREATE TABLE IF NOT EXISTS entries (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-                date          TEXT    NOT NULL,
-                type          TEXT    NOT NULL DEFAULT 'daily',
-                transcript    TEXT    NOT NULL DEFAULT '',
-                edited        INTEGER NOT NULL DEFAULT 0,
-                starred       INTEGER NOT NULL DEFAULT 0,
-                audio_path    TEXT,
-                chroma_id     TEXT,
-                tags          TEXT    NOT NULL DEFAULT '[]',
-                good_tags     TEXT    NOT NULL DEFAULT '[]',
-                bad_tags      TEXT    NOT NULL DEFAULT '[]'
+            CREATE TABLE IF NOT EXISTS settings (
+                key         TEXT PRIMARY KEY,
+                value       TEXT NOT NULL,
+                updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
 
+        # ── JOURNAL ENTRIES ──────────────────────────────────────────────────
+        # structured_summary: JSON blob from AI extraction, stored alongside metrics
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS entries (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+                date               TEXT    NOT NULL,
+                type               TEXT    NOT NULL DEFAULT 'daily',
+                transcript         TEXT    NOT NULL DEFAULT '',
+                edited             INTEGER NOT NULL DEFAULT 0,
+                starred            INTEGER NOT NULL DEFAULT 0,
+                audio_path         TEXT,
+                chroma_id          TEXT,
+                tags               TEXT    NOT NULL DEFAULT '[]',
+                good_tags          TEXT    NOT NULL DEFAULT '[]',
+                bad_tags           TEXT    NOT NULL DEFAULT '[]',
+                structured_summary TEXT
+            )
+        """)
+
+        # Safe column migrations for existing databases
         if not _column_exists(conn, "entries", "tags"):
             log.info("Migration: adding 'tags' column to entries table.")
             c.execute("ALTER TABLE entries ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
@@ -122,6 +119,46 @@ def init_db():
                 raw_extraction   TEXT
             )
         """)
+
+        # ── AI-EXTRACTED METRICS — safe migration for existing databases ────
+        # If the metrics table already exists without the UNIQUE constraint,
+        # we rebuild it. Duplicate entry_id rows (from the old INSERT bug)
+        # are collapsed to the most recently extracted row per entry.
+        if _table_exists(conn, "metrics"):
+            has_unique = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND tbl_name='metrics' AND sql LIKE '%entry_id%'"
+            ).fetchone()
+            if not has_unique:
+                log.info("Migration: rebuilding metrics table to add UNIQUE(entry_id)...")
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS metrics_new (
+                        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                        entry_id         INTEGER NOT NULL UNIQUE REFERENCES entries(id) ON DELETE CASCADE,
+                        date             TEXT    NOT NULL,
+                        stress           REAL,
+                        mood             REAL,
+                        anxiety          REAL,
+                        energy           REAL,
+                        mental_clarity   REAL,
+                        productivity     REAL,
+                        social_sat       REAL,
+                        sentiment        REAL,
+                        raw_extraction   TEXT
+                    )
+                """)
+                c.execute("""
+                    INSERT OR IGNORE INTO metrics_new
+                    SELECT id, entry_id, date, stress, mood, anxiety, energy,
+                           mental_clarity, productivity, social_sat, sentiment, raw_extraction
+                    FROM metrics
+                    WHERE id IN (
+                        SELECT MAX(id) FROM metrics GROUP BY entry_id
+                    )
+                """)
+                c.execute("DROP TABLE metrics")
+                c.execute("ALTER TABLE metrics_new RENAME TO metrics")
+                log.info("Migration: metrics table rebuilt with UNIQUE(entry_id).")
 
         # ── FOLLOW-UP QUESTIONS + ANSWERS ────────────────────────────────────
         c.execute("""
@@ -167,9 +204,14 @@ def init_db():
                 workout_mins        REAL,
                 workout_type        TEXT,
                 blood_oxygen        REAL,
+                screen_time_mins    REAL,
                 raw_import          TEXT
             )
         """)
+
+        if not _column_exists(conn, "health_data", "screen_time_mins"):
+            log.info("Migration: adding 'screen_time_mins' column to health_data table.")
+            c.execute("ALTER TABLE health_data ADD COLUMN screen_time_mins REAL")
 
         # ── WEEKLY RECAPS ────────────────────────────────────────────────────
         c.execute("""
@@ -188,6 +230,11 @@ def init_db():
             )
         """)
 
+        for col in ("patterns", "goals_review", "best_day_note", "worst_day_note"):
+            if not _column_exists(conn, "weekly_recaps", col):
+                log.info(f"Migration: adding '{col}' column to weekly_recaps table.")
+                c.execute(f"ALTER TABLE weekly_recaps ADD COLUMN {col} TEXT")
+
         # ── MONTHLY RECAPS ───────────────────────────────────────────────────
         c.execute("""
             CREATE TABLE IF NOT EXISTS monthly_recaps (
@@ -203,62 +250,6 @@ def init_db():
                 watch_next_month    TEXT,
                 goals_next          TEXT,
                 UNIQUE(period_start, period_end)
-            )
-        """)
-
-        # ── AI-EXTRACTED METRICS — safe migration for existing databases ────
-        # If the metrics table already exists without the UNIQUE constraint,
-        # we rebuild it. This is safe: we copy all rows, drop, recreate, reinsert.
-        # Duplicate entry_id rows (from the old INSERT bug) are collapsed to the
-        # most recently extracted row per entry.
-        if _table_exists(conn, "metrics"):
-            # Check if UNIQUE constraint already exists by looking for the index
-            has_unique = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' "
-                "AND tbl_name='metrics' AND sql LIKE '%entry_id%'"
-            ).fetchone()
-            if not has_unique:
-                log.info("Migration: rebuilding metrics table to add UNIQUE(entry_id)...")
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS metrics_new (
-                        id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                        entry_id         INTEGER NOT NULL UNIQUE REFERENCES entries(id) ON DELETE CASCADE,
-                        date             TEXT    NOT NULL,
-                        stress           REAL,
-                        mood             REAL,
-                        anxiety          REAL,
-                        energy           REAL,
-                        mental_clarity   REAL,
-                        productivity     REAL,
-                        social_sat       REAL,
-                        sentiment        REAL,
-                        raw_extraction   TEXT
-                    )
-                """)
-                # Copy most-recent row per entry_id (collapses duplicates)
-                c.execute("""
-                    INSERT OR IGNORE INTO metrics_new
-                    SELECT id, entry_id, date, stress, mood, anxiety, energy,
-                           mental_clarity, productivity, social_sat, sentiment, raw_extraction
-                    FROM metrics
-                    WHERE id IN (
-                        SELECT MAX(id) FROM metrics GROUP BY entry_id
-                    )
-                """)
-                c.execute("DROP TABLE metrics")
-                c.execute("ALTER TABLE metrics_new RENAME TO metrics")
-                log.info("Migration: metrics table rebuilt with UNIQUE(entry_id).")
-        for col in ("patterns", "goals_review", "best_day_note", "worst_day_note"):
-            if not _column_exists(conn, "weekly_recaps", col):
-                log.info(f"Migration: adding '{col}' column to weekly_recaps table.")
-                c.execute(f"ALTER TABLE weekly_recaps ADD COLUMN {col} TEXT")
-
-        # ── SETTINGS ────────────────────────────────────────────────────────
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key         TEXT PRIMARY KEY,
-                value       TEXT NOT NULL,
-                updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
 
@@ -298,8 +289,7 @@ def init_db():
             log.info("Migration: adding 'is_project' column to todos table.")
             c.execute("ALTER TABLE todos ADD COLUMN is_project INTEGER NOT NULL DEFAULT 0")
 
-        # ── AI MEMORY FACTS (Step 5) ─────────────────────────────────────────
-        # Stores atomic personal facts extracted from journal entries.
+        # ── AI MEMORY FACTS ──────────────────────────────────────────────────
         # dismissed=1 means the user deleted it; excluded from all reads.
         c.execute("""
             CREATE TABLE IF NOT EXISTS memory_facts (
@@ -307,6 +297,32 @@ def init_db():
                 created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
                 fact        TEXT    NOT NULL,
                 dismissed   INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
+        # ── CHAT THREADS ─────────────────────────────────────────────────────
+        # Persistent named conversation threads. entry_context stores injected
+        # journal entries (JSON) so the initial context is stable for the life
+        # of the thread.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS chat_threads (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+                updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+                title         TEXT    NOT NULL DEFAULT 'New Thread',
+                entry_context TEXT                                        -- JSON: injected entry snippets
+            )
+        """)
+
+        # ── CHAT MESSAGES ────────────────────────────────────────────────────
+        # role = 'user' | 'assistant'. Cascade-delete when parent thread is deleted.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id  INTEGER NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+                created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+                role       TEXT    NOT NULL,
+                content    TEXT    NOT NULL
             )
         """)
 
@@ -324,7 +340,7 @@ def init_db():
             )
         """)
 
-        # ── LONGITUDINAL SELF-MODEL (Step 4) ────────────────────────────────
+        # ── LONGITUDINAL SELF-MODEL ──────────────────────────────────────────
         # Stores generated profile snapshots. Each call to /profile/generate
         # inserts a new row; /profile/ returns the most recent one.
         c.execute("""
@@ -341,14 +357,30 @@ def init_db():
         """)
 
         # ── INDEXES ──────────────────────────────────────────────────────────
-        c.execute("CREATE INDEX IF NOT EXISTS idx_entries_date    ON entries(date)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_entries_type    ON entries(type)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_entries_starred ON entries(starred)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_metrics_date    ON metrics(date)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_health_date     ON health_data(date)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_flags_severity  ON flags(severity)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_health_imports_fn ON health_imports(filename)")
+        # entries
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entries_date       ON entries(date)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entries_type       ON entries(type)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entries_starred    ON entries(starred)")
+        # metrics
+        c.execute("CREATE INDEX IF NOT EXISTS idx_metrics_date       ON metrics(date)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_metrics_entry_id   ON metrics(entry_id)")
+        # qa_pairs — entry_id is the primary lookup key; missing in original
+        c.execute("CREATE INDEX IF NOT EXISTS idx_qa_pairs_entry_id  ON qa_pairs(entry_id)")
+        # health
+        c.execute("CREATE INDEX IF NOT EXISTS idx_health_date        ON health_data(date)")
+        # flags — Debrief filters by resolved+dismissed frequently
+        c.execute("CREATE INDEX IF NOT EXISTS idx_flags_severity     ON flags(severity)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_flags_resolved     ON flags(resolved)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_flags_dismissed    ON flags(dismissed)")
+        # todos — active query always filters done=0
+        c.execute("CREATE INDEX IF NOT EXISTS idx_todos_done         ON todos(done)")
+        # health imports
+        c.execute("CREATE INDEX IF NOT EXISTS idx_health_imports_fn  ON health_imports(filename)")
+        # memory
         c.execute("CREATE INDEX IF NOT EXISTS idx_memory_facts_dismissed ON memory_facts(dismissed)")
+        # chat — thread list sorted by updated_at; messages fetched by thread_id
+        c.execute("CREATE INDEX IF NOT EXISTS idx_chat_threads_updated   ON chat_threads(updated_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_thread   ON chat_messages(thread_id)")
 
         # ── DEFAULT SETTINGS ─────────────────────────────────────────────────
         defaults = {
@@ -374,6 +406,7 @@ def init_db():
 
         conn.commit()
 
+        # _migrate_rants must run AFTER commit so the settings row is visible
         _migrate_rants(conn)
 
         log.info(f"Database initialized at {DB_PATH}")
@@ -413,6 +446,9 @@ def get_setting(key: str, default: str = "") -> str:
     try:
         row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
         return row["value"] if row else default
+    except Exception as e:
+        log.warning(f"get_setting({key!r}) failed: {e}")
+        return default
     finally:
         conn.close()
 
@@ -426,5 +462,8 @@ def set_setting(key: str, value: str):
             (key, value)
         )
         conn.commit()
+    except Exception as e:
+        log.error(f"set_setting({key!r}) failed: {e}")
+        raise
     finally:
         conn.close()

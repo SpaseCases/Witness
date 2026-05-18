@@ -1,35 +1,22 @@
+# Bug fix: beam_size split (base=1 greedy, turbo=5); condition_on_previous_text
+#          split (base=False, turbo=True); temperature corrections per task table
+#          (todos 0.1, questions 0.7, metrics 0.1, tag-day 0.1, context extract 0.15,
+#          summary 0.1); fmt="json" added to all JSON-returning generate() calls;
+#          safe_send now sets connected=False on exception to stop retry loop.
 """
 WITNESS -- Transcription + AI Follow-Up API
+# Updated: Two-model architecture — base model for live WebSocket partials,
+#           large-v3-turbo for final upload. Both models use _detect_device()
+#           instead of hardcoded "cpu". Turbo model pre-loads at startup in a
+#           background thread via preload_turbo(). WebSocket now sends live
+#           partials immediately (every 6 chunks) from the base model.
 
 Endpoints:
-  POST /transcribe/upload          -- transcribe a complete audio file
+  POST /transcribe/upload          -- transcribe a complete audio file (turbo model)
   POST /transcribe/questions       -- generate AI follow-up questions from transcript
   POST /transcribe/extract-metrics -- extract mood/stress scores from transcript
   POST /transcribe/embed           -- embed a saved entry into ChromaDB (call after save)
-  WS   /transcribe/stream          -- real-time streaming transcription
-
-Step 6 additions:
-  - _extract_todos_background(): after every upload, scans the transcript for
-    actionable items and projects. For each item the AI returns:
-      * If it's similar to an existing open todo → appends a note to it
-      * If it's genuinely new → inserts as a new todo row
-    AI also flags each item as a project (multi-step, ongoing) or a task (one-off).
-    Runs in a daemon thread — never blocks the HTTP response.
-  - start_todo_extraction(): public launcher called from /upload endpoint.
-
-FIX (follow-up questions):
-  - Restored minimum transcript length to 300 chars — consistent with the
-    frontend threshold in JournalEntry.jsx. Both gates must agree or the UI
-    shows the question block for entries the backend silently skips.
-  - Added detailed logging at every step: raw AI response, cleaned text, regex
-    match result, and final parsed output. Check your terminal for WITNESS logs
-    to see exactly what happened on any failed call.
-  - Added a second JSON extraction pass using a more permissive regex so partial
-    or oddly-wrapped arrays are still captured.
-  - The endpoint now always returns a 'debug' field with the raw AI snippet so
-    the frontend can surface it in dev mode if needed.
-  - Increased max_tokens from 300 to 500 so longer-thinking models (DeepSeek R1
-    with its <think> blocks) have room to finish before the JSON.
+  WS   /transcribe/stream          -- real-time streaming transcription (base model)
 """
 
 import asyncio
@@ -43,73 +30,99 @@ from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from pydantic import BaseModel
+from ollama_manager import clean_llm_json
 
 log    = logging.getLogger("witness.transcribe")
 router = APIRouter()
 
-_whisper_model = None
+
+# ─── GLOBALS: Two separate model slots ───────────────────────────────────────
+
+_base_model  = None          # WhisperModel("base")  — live WebSocket partials
+_turbo_model = None          # WhisperModel("large-v3-turbo") — final /upload transcript
+_turbo_ready = threading.Event()   # set() when turbo model has finished loading
 
 
-# ─── JSON CLEANING HELPER ─────────────────────────────────────────────────────
+# ─── DEVICE AUTO-DETECTION ───────────────────────────────────────────────────
 
-def clean_llm_json(raw: str) -> str:
+def _detect_device() -> str:
     """
-    Extract bare JSON from an LLM response.
-
-    DeepSeek R1 has two failure modes:
-      1. JSON appears AFTER </think> — stripping think tags leaves clean JSON (old behaviour)
-      2. JSON appears INSIDE <think>...</think> — stripping think tags destroys the JSON
-
-    Strategy:
-      - First, look for a JSON object/array anywhere in the raw string (including inside think tags)
-      - Pull that out as the canonical content
-      - Then strip think tags and markdown fences from whatever remains
+    Try CUDA (Nvidia), fall back to CPU.
+    ROCm on Windows does not support RX 6000 series, so AMD users land on CPU.
+    Code stays device-agnostic so it works unchanged for Nvidia or RX 7000 users.
     """
-    # ── Step 1: grab the first JSON object or array directly from raw ──────────
-    # This works whether the JSON is inside or outside <think> blocks.
-    json_in_raw = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', raw)
-
-    if json_in_raw:
-        candidate = json_in_raw.group(1).strip()
-        # Quick sanity-check: if it parses, return it immediately
-        try:
-            json.loads(candidate)
-            return candidate
-        except json.JSONDecodeError:
-            pass  # malformed — fall through to the cleaned-text approach
-
-    # ── Step 2: strip think blocks and fences, then return what's left ────────
-    text = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL)
-    fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
-    if fence_match:
-        text = fence_match.group(1)
-    return text.strip()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            log.info("Whisper device: CUDA detected.")
+            return "cuda"
+    except ImportError:
+        pass
+    log.info("Whisper device: falling back to CPU.")
+    return "cpu"
 
 
-# ─── WHISPER LOADER ───────────────────────────────────────────────────────────
+# ─── MODEL LOADERS ────────────────────────────────────────────────────────────
 
-def get_whisper():
-    global _whisper_model
-    if _whisper_model is None:
+def get_base() -> "WhisperModel":
+    """
+    Return the base model, loading it on first call (~1-2 seconds).
+    Used exclusively by the WebSocket for live partial transcription.
+    """
+    global _base_model
+    if _base_model is None:
         from faster_whisper import WhisperModel
-        log.info("Loading Faster-Whisper (CPU, int8)...")
-        try:
-            _whisper_model = WhisperModel(
-                "large-v3-turbo",
-                device="cpu",
-                compute_type="int8"
-            )
-            log.info("Whisper large-v3-turbo loaded on CPU.")
-        except Exception as e:
-            log.warning(f"large-v3-turbo failed ({e}), falling back to base model...")
-            _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
-            log.info("Whisper base model loaded on CPU.")
-    return _whisper_model
+        device = _detect_device()
+        log.info(f"Loading Whisper base model on {device}...")
+        _base_model = WhisperModel("base", device=device, compute_type="int8")
+        log.info("Whisper base model ready.")
+    return _base_model
 
 
-def transcribe_audio_file(audio_bytes: bytes, language: str = "en") -> dict:
-    model = get_whisper()
+def get_turbo() -> "WhisperModel":
+    """
+    Return the large-v3-turbo model, loading it if necessary.
+    Used exclusively by POST /upload for the clean final transcript.
+    Normally pre-loaded at startup by preload_turbo() so this is instant.
+    """
+    global _turbo_model
+    if _turbo_model is None:
+        from faster_whisper import WhisperModel
+        device = _detect_device()
+        log.info(f"Loading Whisper large-v3-turbo on {device} (lazy load)...")
+        _turbo_model = WhisperModel("large-v3-turbo", device=device, compute_type="int8")
+        _turbo_ready.set()
+        log.info("Whisper large-v3-turbo ready (lazy).")
+    return _turbo_model
 
+
+def preload_turbo():
+    """
+    Pre-load the turbo model in a background thread at startup.
+    Called from main.py lifespan — does not block app startup.
+    Sets _turbo_ready when done so the WebSocket can inform the frontend.
+    """
+    global _turbo_model
+    try:
+        from faster_whisper import WhisperModel
+        device = _detect_device()
+        log.info(f"Preloading Whisper large-v3-turbo on {device}...")
+        _turbo_model = WhisperModel("large-v3-turbo", device=device, compute_type="int8")
+        _turbo_ready.set()
+        log.info("Whisper large-v3-turbo preload complete.")
+    except Exception as e:
+        log.warning(f"Turbo preload failed ({e}) — will load on first /upload call.")
+
+
+# ─── AUDIO TRANSCRIPTION HELPERS ─────────────────────────────────────────────
+
+def _run_transcription_base(model, audio_bytes: bytes, language: str = "en") -> dict:
+    """
+    Live-preview transcription using the base model.
+    beam_size=1 (greedy) for speed. condition_on_previous_text=False to
+    prevent hallucination loops on repeated partials.
+    vad_filter=True prevents hallucinations on silence segments.
+    """
     with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
         tmp.write(audio_bytes)
         tmp_path = tmp.name
@@ -118,18 +131,58 @@ def transcribe_audio_file(audio_bytes: bytes, language: str = "en") -> dict:
         segments, info = model.transcribe(
             tmp_path,
             language=language,
-            beam_size=5,
+            beam_size=1,                        # greedy — fast for live preview
             vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500}
+            vad_parameters={"min_silence_duration_ms": 500},
+            condition_on_previous_text=False,   # prevents hallucination loops in live mode
         )
         text = " ".join(seg.text.strip() for seg in segments).strip()
-        log.info(f"Transcribed {info.duration:.1f}s -- {len(text)} chars, lang={info.language}")
+        log.info(f"Base partial transcribed {info.duration:.1f}s — {len(text)} chars")
         return {"transcript": text, "duration": round(info.duration, 1), "language": info.language}
     finally:
         try:
             os.unlink(tmp_path)
         except Exception:
             pass
+
+
+def _run_transcription_turbo(model, audio_bytes: bytes, language: str = "en") -> dict:
+    """
+    Final accurate transcription using the turbo model.
+    beam_size=5 for accuracy. condition_on_previous_text=True for coherent
+    multi-segment transcription. vad_filter=True to skip silence.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    try:
+        segments, info = model.transcribe(
+            tmp_path,
+            language=language,
+            beam_size=5,                        # standard accuracy beam
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+            condition_on_previous_text=True,    # improves coherence across segments
+        )
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        log.info(f"Turbo transcribed {info.duration:.1f}s — {len(text)} chars, lang={info.language}")
+        return {"transcript": text, "duration": round(info.duration, 1), "language": info.language}
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+def transcribe_audio_file(audio_bytes: bytes, language: str = "en") -> dict:
+    """Final transcript — always uses the turbo model with accuracy settings."""
+    return _run_transcription_turbo(get_turbo(), audio_bytes, language)
+
+
+def transcribe_audio_partial(audio_bytes: bytes) -> dict:
+    """Live preview partial — always uses the base model with speed settings."""
+    return _run_transcription_base(get_base(), audio_bytes)
 
 
 # ─── REST: Upload and transcribe ─────────────────────────────────────────────
@@ -194,20 +247,25 @@ For each item, determine:
 - "text": a clear, specific description (max 12 words)
 - "is_project": true if this is a multi-step project or ongoing effort, false if it's a single task
 - "type": "project" or "task"
+- "due_date": ISO date string (YYYY-MM-DD) if the entry implies a deadline, null otherwise
+  Examples: "study for test on Tuesday" -> next Tuesday's date, "doctor appointment Friday" -> next Friday
+  Use today's date as reference: {today}
+  If no clear deadline is mentioned, always return null
 
 Rules:
 - Maximum 4 items total
 - Skip vague feelings or observations that don't require action
 - Be specific — use names and details from the entry
-- Return ONLY a JSON array, nothing else. Empty array [] if nothing actionable.
+- Return ONLY a JSON array, nothing else. No explanation. No markdown fences. Empty array [] if nothing actionable.
 
 Entry:
 {transcript}
 
 Return format:
 [
-  {{"text": "Schedule dentist appointment", "is_project": false}},
-  {{"text": "Research options for career change", "is_project": true}}
+  {{"text": "Schedule dentist appointment", "is_project": false, "due_date": null}},
+  {{"text": "Research options for career change", "is_project": true, "due_date": null}},
+  {{"text": "Submit report by Friday", "is_project": false, "due_date": "2025-05-09"}}
 ]"""
 
 _SIMILARITY_PROMPT = """You are checking if two to-do items refer to the same underlying topic.
@@ -226,7 +284,16 @@ def _items_are_similar(existing_text: str, new_text: str) -> bool:
             existing=existing_text[:200],
             new_item=new_text[:200]
         )
-        raw = asyncio.run(generate(prompt=prompt, temperature=0.1, max_tokens=5))
+        loop = asyncio.new_event_loop()
+        try:
+            raw = loop.run_until_complete(generate(
+                prompt=prompt,
+                temperature=0.1,
+                max_tokens=5,
+                num_ctx=2048,       # tiny prompt — minimal context window needed
+            ))
+        finally:
+            loop.close()
         answer = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip().upper()
         return answer.startswith("YES")
     except Exception as e:
@@ -239,17 +306,30 @@ def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
     Background thread: scan a journal transcript for actionable items.
     Never raises — all errors are logged and swallowed so the thread dies quietly.
     """
+    from datetime import date as _date
     log.info(f"Todo extraction starting for entry {entry_id}...")
 
     try:
         from ollama_manager import generate
         from database import get_conn
 
-        prompt = _TODO_EXTRACT_PROMPT.format(transcript=transcript[:3000])
-        raw    = asyncio.run(generate(prompt=prompt, temperature=0.3, max_tokens=500))
+        today = _date.today().strftime('%Y-%m-%d')
+        prompt = _TODO_EXTRACT_PROMPT.format(transcript=transcript[:3000], today=today)
+
+        loop = asyncio.new_event_loop()
+        try:
+            # temperature=0.1: deterministic JSON extraction per task table
+            raw = loop.run_until_complete(generate(
+                prompt=prompt,
+                temperature=0.1,
+                max_tokens=500,
+                fmt="json",         # enable Ollama JSON mode for reliable output
+            ))
+        finally:
+            loop.close()
+
         clean  = clean_llm_json(raw)
 
-        # Extract the JSON array from the response
         match = re.search(r'\[.*?\]', clean, re.DOTALL)
         if not match:
             log.debug(f"Todo extraction: no JSON array found in response for entry {entry_id}")
@@ -274,7 +354,7 @@ def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
                 "SELECT id, text, notes FROM todos WHERE done = 0"
             ).fetchall()
 
-            added   = 0
+            added    = 0
             appended = 0
 
             for item in items[:4]:
@@ -286,6 +366,10 @@ def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
                     continue
 
                 is_project = 1 if item.get("is_project") else 0
+                due_date   = item.get("due_date")
+                # Validate due_date format — reject anything that doesn't look like YYYY-MM-DD
+                if due_date and not re.match(r'^\d{4}-\d{2}-\d{2}$', str(due_date)):
+                    due_date = None
 
                 matched_id = None
                 for existing in existing_todos:
@@ -312,11 +396,11 @@ def _extract_todos_background(transcript: str, entry_id: int, entry_date: str):
                     log.debug(f"Todo extraction: appended note to todo {matched_id}")
                 else:
                     conn.execute("""
-                        INSERT INTO todos (text, source_entry_id, source_date, notes, is_project)
-                        VALUES (?, ?, ?, '[]', ?)
-                    """, (text, entry_id, entry_date, is_project))
+                        INSERT INTO todos (text, source_entry_id, source_date, notes, is_project, due_date)
+                        VALUES (?, ?, ?, '[]', ?, ?)
+                    """, (text, entry_id, entry_date, is_project, due_date))
                     added += 1
-                    log.debug(f"Todo extraction: added new todo '{text[:50]}' (project={is_project})")
+                    log.debug(f"Todo extraction: added new todo '{text[:50]}' (project={is_project}, due={due_date})")
 
             conn.commit()
             log.info(f"Todo extraction complete for entry {entry_id}: {added} added, {appended} appended.")
@@ -339,28 +423,6 @@ def start_todo_extraction(transcript: str, entry_id: int, entry_date: str):
 
 
 # ─── REST: Generate follow-up questions ──────────────────────────────────────
-#
-# FIX NOTES:
-#   - Minimum transcript length: 300 chars (matches frontend JournalEntry.jsx).
-#     Both the frontend gate and this backend gate must agree — mismatched
-#     thresholds cause the question block to appear while the backend silently
-#     skips the call.
-#
-#   - max_tokens raised from 300 → 500.
-#     DeepSeek R1 emits a long <think>...</think> block before responding.
-#     At 300 tokens the model was sometimes running out of space before
-#     reaching the JSON, causing parse failures.
-#
-#   - Three-stage JSON extraction:
-#       1. clean_llm_json() strips think blocks and fences first
-#       2. Tight array regex: [\s\S]*? (non-greedy, finds first array)
-#       3. Permissive fallback: [\s\S]+ (greedy, captures if array contains
-#          nested objects or escaped quotes that tripped the non-greedy pass)
-#     This handles all known DeepSeek R1 output shapes.
-#
-#   - Every step is now logged at DEBUG level.
-#     Run the backend and watch the terminal — you will see exactly what the
-#     AI returned and where parsing succeeded or failed.
 
 class QuestionsRequest(BaseModel):
     transcript: str
@@ -374,14 +436,10 @@ async def generate_questions(body: QuestionsRequest):
     transcript_len = len(body.transcript.strip()) if body.transcript else 0
     log.info(f"Questions endpoint called — transcript length: {transcript_len} chars")
 
-    # Threshold matches frontend (JournalEntry.jsx): 300 chars minimum.
-    # Both gates must agree — if they differ the UI shows the question block
-    # while the backend silently returns an empty array.
     if not body.transcript or transcript_len < 300:
         log.warning(f"Questions skipped — transcript too short ({transcript_len} chars, minimum 300)")
         return {"questions": [], "status": "transcript_too_short", "detail": f"Transcript is {transcript_len} chars, minimum 300"}
 
-    # Inject memory context (Layer B + C)
     try:
         from routes.memory import build_memory_context_block
         memory_context = build_memory_context_block(body.transcript, n=3)
@@ -409,24 +467,20 @@ Journal entry:
 Return format: ["question 1", "question 2", "question 3"]"""
 
     try:
-        # Increased max_tokens: DeepSeek R1 uses tokens for its <think> block
-        # before reaching the JSON answer. 300 was too tight.
-        raw = await generate(prompt=prompt, temperature=0.6, max_tokens=500)
+        # temperature=0.7: some variety for questions, per task table
+        raw = await generate(prompt=prompt, temperature=0.7, max_tokens=500, fmt="json")
         log.debug(f"Questions raw AI response ({len(raw)} chars): {raw[:300]}")
 
         clean = clean_llm_json(raw)
         log.debug(f"Questions after clean_llm_json: {clean[:200]}")
 
-        # Stage 1: non-greedy array match (handles simple arrays)
         match = re.search(r'\[[\s\S]*?\]', clean)
 
-        # Stage 2: permissive fallback if stage 1 found nothing or failed to parse
         if not match:
             log.debug("Questions: non-greedy regex found nothing, trying permissive match")
             match = re.search(r'\[[\s\S]+\]', clean)
 
         if not match:
-            # Stage 3: try the raw response directly in case clean_llm_json over-stripped
             log.debug("Questions: trying raw response for array extraction")
             match = re.search(r'\[[\s\S]+\]', raw)
 
@@ -447,9 +501,7 @@ Return format: ["question 1", "question 2", "question 3"]"""
             log.warning(f"Questions: parsed value is not a list: {type(questions)}")
             return {"questions": [], "status": "parse_failed", "detail": "AI returned non-list JSON"}
 
-        # Filter out any non-string items (sometimes AI sneaks in objects)
         questions = [str(q).strip() for q in questions if q and str(q).strip()]
-
         result = questions[:body.count]
         log.info(f"Questions generated successfully: {len(result)} questions")
         return {"questions": result, "status": "ok"}
@@ -465,21 +517,45 @@ class MetricsRequest(BaseModel):
     transcript: str
     entry_id:   Optional[int] = None
 
-_METRICS_PROMPT_TEMPLATE = """Analyze this journal entry and extract psychological metrics. Be honest and accurate. Base scores strictly on what the person says and how they say it.
+_METRICS_PROMPT_TEMPLATE = """Extract psychological metrics from this journal entry. Score only what the person actually describes. Do not infer what they did not mention.
 
-Return ONLY a JSON object with these exact keys:
-{{
-  "stress":         <1-10, 10=extreme stress>,
-  "mood":           <1-10, 10=excellent mood>,
-  "anxiety":        <1-10, 10=severe anxiety>,
-  "energy":         <1-10, 10=high energy>,
-  "mental_clarity": <1-10, 10=very clear thinking>,
-  "productivity":   <1-10, 10=highly productive>,
-  "social_sat":     <1-10, 10=very satisfied socially, null if not mentioned>,
-  "sentiment":      <-1.0 to 1.0, overall emotional tone>
-}}
+Use these anchored definitions for each 1-10 scale:
 
-If a metric cannot be determined, use null. Return ONLY the JSON object.
+STRESS: How burdened or pressured does the person feel?
+  1-2=calm, no pressure  3-4=mild manageable pressure  5-6=noticeable stress, coping  7-8=high stress, frequently overwhelmed  9-10=extreme, crisis-level
+
+MOOD: Overall emotional quality of their day
+  1-2=very low/depressed/empty  3-4=sad/irritable/discouraged  5-6=neutral to slightly positive  7-8=good, upbeat, satisfied  9-10=excellent, very happy
+
+ANXIETY: Worry, fear, nervousness, or dread expressed
+  1-2=no anxiety  3-4=mild worry about specific things  5-6=moderate, intrusive thoughts  7-8=high, persistent worry or physical symptoms  9-10=severe/panic-level
+  Return null if anxiety is not mentioned.
+
+ENERGY: Physical and mental energy levels
+  1-2=exhausted, can barely function  3-4=low/sluggish  5-6=average/functional  7-8=good energy, productive  9-10=very high energy
+
+MENTAL_CLARITY: Focus and cognitive sharpness
+  1-2=very foggy, can't concentrate  3-4=scattered/distracted  5-6=average  7-8=clear, focused  9-10=sharp/in flow state
+  Return null if not mentioned.
+
+PRODUCTIVITY: How much was accomplished vs intended
+  1-2=nothing done  3-4=very little, avoided tasks  5-6=partially productive  7-8=mostly completed tasks  9-10=highly productive, exceeded goals
+  Return null if not mentioned.
+
+SOCIAL_SAT: Satisfaction with social interactions
+  1-2=isolated or negative social experiences  3-4=lonely or social friction  5-6=neutral/ordinary contact  7-8=good connections, felt supported  9-10=very connected
+  Return null if social interactions not mentioned.
+
+SENTIMENT (-1.0 to 1.0): Overall emotional tone
+  -1.0=entirely negative  -0.5=mostly negative  0.0=neutral/mixed  +0.5=mostly positive  +1.0=entirely positive
+
+SCREEN_TIME_HRS: Estimated hours of phone/screen use IF the person explicitly mentions it.
+  Return null if not mentioned — do not assume.
+
+NOTE: Excessive screen use mentioned as passive coping (scrolling, can't put phone down) is a mild negative signal for mood and energy — factor it in proportionally.
+
+Return ONLY a valid JSON object. No explanation. No preamble. No markdown fences.
+{{"stress": 6, "mood": 4, "anxiety": 7, "energy": 3, "mental_clarity": null, "productivity": 4, "social_sat": null, "sentiment": -0.4, "screen_time_hrs": null}}
 
 Journal entry:
 {transcript}"""
@@ -489,13 +565,16 @@ Journal entry:
 async def extract_metrics(body: MetricsRequest):
     from ollama_manager import generate
 
+    log.info(f"extract-metrics called: entry_id={body.entry_id}, transcript_len={len(body.transcript) if body.transcript else 0}")
+
     if not body.transcript or len(body.transcript.strip()) < 30:
         return {"metrics": {}, "status": "skipped", "detail": "transcript too short"}
 
     prompt = _METRICS_PROMPT_TEMPLATE.format(transcript=body.transcript[:3000])
 
     try:
-        raw   = await generate(prompt=prompt, temperature=0.3, max_tokens=400)
+        # temperature=0.1: deterministic JSON extraction per task table
+        raw   = await generate(prompt=prompt, temperature=0.1, max_tokens=400, fmt="json", num_ctx=8192)
         clean = clean_llm_json(raw)
 
         metrics = None
@@ -516,8 +595,6 @@ async def extract_metrics(body: MetricsRequest):
             from database import get_conn
             conn = get_conn()
             try:
-                # Use the entry's own date (not today) so backfilled or
-                # yesterday's entries don't land on today in trend graphs.
                 entry_row = conn.execute(
                     "SELECT date FROM entries WHERE id = ?", (body.entry_id,)
                 ).fetchone()
@@ -541,6 +618,32 @@ async def extract_metrics(body: MetricsRequest):
                     metrics.get("sentiment"),
                     json.dumps(metrics)
                 ))
+
+                # Auto-save screen time to health_data if AI detected it
+                screen_hrs = metrics.get("screen_time_hrs")
+                if screen_hrs is not None and entry_date:
+                    try:
+                        screen_mins = float(screen_hrs) * 60
+                        existing = conn.execute(
+                            "SELECT id, screen_time_mins FROM health_data WHERE date = ?",
+                            (entry_date,)
+                        ).fetchone()
+                        if existing:
+                            # Only overwrite if no manual entry exists
+                            if existing["screen_time_mins"] is None:
+                                conn.execute(
+                                    "UPDATE health_data SET screen_time_mins = ? WHERE date = ?",
+                                    (screen_mins, entry_date)
+                                )
+                        else:
+                            conn.execute(
+                                "INSERT INTO health_data (date, screen_time_mins) VALUES (?, ?)",
+                                (entry_date, screen_mins)
+                            )
+                        log.info(f"Auto-saved screen time from journal: {entry_date} = {screen_mins:.0f} mins")
+                    except Exception as e:
+                        log.warning(f"Could not auto-save screen time: {e}")
+
                 conn.commit()
             finally:
                 conn.close()
@@ -600,7 +703,7 @@ Rules:
 - Maximum 5 tags per category
 - Tags must be specific to what was said (e.g. "gym session", "work deadline", "argument with friend")
 - Skip vague tags like "bad day" or "feeling good"
-- Return ONLY a JSON object, nothing else
+- Return ONLY a JSON object, nothing else. No explanation. No markdown fences.
 - Empty arrays are fine if the entry doesn't clearly have good or bad elements
 
 Journal entry:
@@ -624,7 +727,8 @@ async def tag_day(body: TagDayRequest):
 
     try:
         prompt = _TAG_DAY_PROMPT.format(transcript=body.transcript[:2000])
-        raw    = await generate(prompt=prompt, temperature=0.3, max_tokens=200)
+        # temperature=0.1: deterministic JSON extraction per task table
+        raw    = await generate(prompt=prompt, temperature=0.1, max_tokens=200, fmt="json")
         clean  = clean_llm_json(raw)
 
         match = re.search(r'\{.*?\}', clean, re.DOTALL)
@@ -673,7 +777,7 @@ New {entry_type} recorded:
 Extract NEW factual information not already in the document.
 Focus on: relationships, work, health patterns, recurring stressors, goals, major life events.
 Be specific. Ignore one-off complaints or passing moods.
-Return ONLY this JSON -- nothing else:
+Return ONLY this JSON -- nothing else. No explanation. No markdown fences.
 {{ "new_facts": ["fact 1", "fact 2"] }}
 Empty array if nothing genuinely new."""
 
@@ -710,7 +814,18 @@ def _update_context_background(transcript: str, entry_type: str = 'daily'):
             transcript=transcript[:3000]
         )
 
-        raw = asyncio.run(generate(prompt=extract_prompt, temperature=0.3, max_tokens=400))
+        loop = asyncio.new_event_loop()
+        try:
+            # temperature=0.15: memory fact extraction — precise and factual per task table
+            raw = loop.run_until_complete(generate(
+                prompt=extract_prompt,
+                temperature=0.15,
+                max_tokens=400,
+                fmt="json",     # enable JSON mode for reliable fact extraction
+            ))
+        finally:
+            loop.close()
+
         clean = clean_llm_json(raw)
 
         match = re.search(r'\{.*?\}', clean, re.DOTALL)
@@ -729,9 +844,15 @@ def _update_context_background(transcript: str, entry_type: str = 'daily'):
         if len(profile) + 500 > 8000:
             log.info("Context update: profile near limit, compressing...")
             compress_prompt = _CONTEXT_COMPRESS_PROMPT.format(profile=profile)
-            compressed_raw = asyncio.run(
-                generate(prompt=compress_prompt, temperature=0.2, max_tokens=800)
-            )
+
+            loop2 = asyncio.new_event_loop()
+            try:
+                compressed_raw = loop2.run_until_complete(
+                    generate(prompt=compress_prompt, temperature=0.2, max_tokens=800)
+                )
+            finally:
+                loop2.close()
+
             compressed = re.sub(r'<think>.*?</think>', '', compressed_raw, flags=re.DOTALL).strip()
             compressed = re.sub(r'```.*?```', '', compressed, flags=re.DOTALL).strip()
             profile = compressed
@@ -763,7 +884,7 @@ def start_context_update(transcript: str, entry_type: str = 'daily'):
 
 _STRUCTURED_SUMMARY_PROMPT = """You are analyzing a personal journal entry.
 
-Extract the following from the transcript below and return ONLY valid JSON:
+Extract the following from the transcript below and return ONLY valid JSON. No explanation. No preamble. No markdown fences.
 - "summary": One clear, specific sentence describing what happened or what the person discussed. Not generic. Specific.
 - "highlights": 2 to 4 bullet points capturing the key topics, feelings, or events. Each under 12 words. Be direct.
 - "intentions": Any goals, plans, or things the person said they want to do. Empty array [] if none stated.
@@ -772,7 +893,6 @@ Rules:
 - Be specific to what was actually said — no generic observations
 - Highlights should read like field notes, not wellness summaries
 - If the person mentioned something significant in passing, surface it
-- Return ONLY the JSON object. No explanation, no preamble, no markdown fences.
 
 Transcript:
 {transcript}
@@ -797,7 +917,19 @@ def _generate_structured_summary_background(transcript: str, entry_id: int):
         from database import get_conn
 
         prompt = _STRUCTURED_SUMMARY_PROMPT.format(transcript=transcript[:3000])
-        raw    = asyncio.run(generate(prompt=prompt, temperature=0.3, max_tokens=400))
+
+        loop = asyncio.new_event_loop()
+        try:
+            # temperature=0.1: JSON extraction, deterministic per task table
+            raw = loop.run_until_complete(generate(
+                prompt=prompt,
+                temperature=0.1,
+                max_tokens=400,
+                fmt="json",     # enable JSON mode
+            ))
+        finally:
+            loop.close()
+
         clean  = clean_llm_json(raw)
 
         parsed = None
@@ -814,9 +946,9 @@ def _generate_structured_summary_background(transcript: str, entry_id: int):
             log.warning(f"Structured summary: could not parse JSON for entry {entry_id}. Raw: {clean[:200]}")
             return
 
-        summary     = str(parsed.get("summary", "")).strip()
-        highlights  = parsed.get("highlights", [])
-        intentions  = parsed.get("intentions", [])
+        summary    = str(parsed.get("summary", "")).strip()
+        highlights = parsed.get("highlights", [])
+        intentions = parsed.get("intentions", [])
 
         if not isinstance(highlights, list): highlights = []
         if not isinstance(intentions, list): intentions = []
@@ -850,13 +982,10 @@ def _generate_structured_summary_background(transcript: str, entry_id: int):
 
 
 # ─── REST: Trigger memory update for written (non-audio) entries ─────────────
-# WriteMode and any future typed-entry modes call this after saving.
-# Voice entries already trigger memory update via /upload. This route
-# provides the same trigger for entries that skip the audio pipeline.
 
 class MemoryUpdateRequest(BaseModel):
     transcript: str
-    entry_type: str = "write"   # "write", "rant", "daily" etc.
+    entry_type: str = "write"
 
 
 @router.post("/update-memory")
@@ -887,6 +1016,14 @@ async def generate_structured_summary(body: StructuredSummaryRequest):
 
 
 # ─── WEBSOCKET: Real-time streaming transcription ────────────────────────────
+#
+# Two-model architecture:
+#   - Base model handles live partials (loads in ~1-2 seconds on first connect)
+#   - Turbo model handles POST /upload (pre-loaded at startup by preload_turbo)
+#
+# Partial frequency: every 6 chunks (~3 seconds at 500ms per chunk).
+# On connect: sends {"type": "model_loading"} if turbo not yet ready (informational).
+# Text from base model is rough — that is expected and acceptable for live preview.
 
 @router.websocket("/stream")
 async def transcribe_stream(ws: WebSocket):
@@ -895,15 +1032,31 @@ async def transcribe_stream(ws: WebSocket):
 
     audio_buffer = bytearray()
     chunk_count  = 0
-    connected    = True   # track state so we never send on a closed socket
+    connected    = True
 
     async def safe_send(payload: dict):
-        """Send JSON only if the socket is still open."""
+        """Send JSON only if the socket is still open. Sets connected=False on failure."""
+        nonlocal connected
         try:
             if connected:
                 await ws.send_json(payload)
         except Exception:
-            pass   # socket closed between the check and the send -- ignore
+            connected = False
+
+    # Inform the frontend if turbo model hasn't finished loading yet.
+    # This is informational only — recording works fine regardless.
+    if not _turbo_ready.is_set():
+        await safe_send({"type": "model_loading"})
+        log.info("WebSocket: turbo model still loading — sent model_loading signal.")
+
+    # Load the base model now if not already loaded.
+    # This runs in a thread to avoid blocking the async loop.
+    try:
+        await asyncio.to_thread(get_base)
+        log.info("WebSocket: base model ready.")
+    except Exception as e:
+        log.warning(f"WebSocket: base model load failed: {e}")
+        await safe_send({"type": "error", "text": "Whisper base model failed to load."})
 
     try:
         while True:
@@ -911,16 +1064,15 @@ async def transcribe_stream(ws: WebSocket):
             audio_buffer.extend(data)
             chunk_count += 1
 
-            # Only attempt partial transcription every 10 chunks and when
-            # Whisper is already loaded. If the model is still loading
-            # (first run after install) the to_thread call would block for
-            # 30+ seconds and the socket would be long dead by then.
-            if chunk_count % 10 == 0 and len(audio_buffer) > 8000 and _whisper_model is not None:
+            # Send a partial every 6 chunks (~3 seconds of audio).
+            # Use the base model — fast, good enough for live preview.
+            if chunk_count % 6 == 0 and len(audio_buffer) > 4000:
                 try:
-                    result  = await asyncio.to_thread(transcribe_audio_file, bytes(audio_buffer))
+                    result  = await asyncio.to_thread(transcribe_audio_partial, bytes(audio_buffer))
                     partial = result.get("transcript", "")
                     if partial:
                         await safe_send({"type": "partial", "text": partial})
+                        log.debug(f"WebSocket partial: {len(partial)} chars")
                 except Exception as e:
                     log.warning(f"Partial transcription failed: {e}")
 

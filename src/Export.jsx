@@ -18,7 +18,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { gsap } from 'gsap'
-import '../src/styles/export.css'
+import './styles/export.css'
 
 const API = 'http://127.0.0.1:8000'
 

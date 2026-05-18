@@ -1,3 +1,7 @@
+# Bug fix: _fetch_recaps() was querying a non-existent "recaps" table —
+#          replaced with correct queries to weekly_recaps and monthly_recaps;
+#          m.clarity renamed to m.mental_clarity and m.social to m.social_sat
+#          to match the actual metrics table column names.
 """
 WITNESS — Export API  (Step 5)
 
@@ -26,7 +30,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter
-from fastapi.responses import Response, PlainTextResponse
+from fastapi.responses import Response
 
 from database import get_conn
 
@@ -81,8 +85,8 @@ def _fetch_entries(start: Optional[date], end: Optional[date]) -> list:
 
         rows = conn.execute(f"""
             SELECT e.*,
-                   m.mood, m.stress, m.energy, m.anxiety, m.clarity,
-                   m.productivity, m.social, m.sentiment
+                   m.mood, m.stress, m.energy, m.anxiety, m.mental_clarity,
+                   m.productivity, m.social_sat, m.sentiment
             FROM   entries e
             LEFT JOIN metrics m ON m.entry_id = e.id
             {where}
@@ -107,30 +111,63 @@ def _fetch_entries(start: Optional[date], end: Optional[date]) -> list:
 
 
 def _fetch_recaps(start: Optional[date], end: Optional[date]) -> list:
-    """Fetch weekly and monthly recaps that fall within the date range."""
+    """
+    Fetch weekly and monthly recaps that fall within the date range.
+    Queries weekly_recaps and monthly_recaps tables (NOT a generic 'recaps' table
+    which does not exist in the schema).
+    """
     conn = get_conn()
     try:
-        conditions = ["type IN ('weekly','monthly')"]
-        params = []
+        results = []
+
+        # Weekly recaps
+        w_conditions = []
+        w_params = []
         if start:
-            conditions.append("period_end >= ?")
-            params.append(start.isoformat())
+            w_conditions.append("week_end >= ?")
+            w_params.append(start.isoformat())
         if end:
-            conditions.append("period_start <= ?")
-            params.append(end.isoformat())
-        where = "WHERE " + " AND ".join(conditions)
+            w_conditions.append("week_start <= ?")
+            w_params.append(end.isoformat())
+        w_where = ("WHERE " + " AND ".join(w_conditions)) if w_conditions else ""
+        try:
+            rows = conn.execute(f"""
+                SELECT 'weekly' AS type, created_at AS generated_at,
+                       week_start AS period_start, week_end AS period_end,
+                       summary AS content
+                FROM weekly_recaps
+                {w_where}
+                ORDER BY week_start ASC
+            """, w_params).fetchall()
+            results.extend([dict(r) for r in rows])
+        except Exception as e:
+            log.warning(f"Could not fetch weekly recaps for export: {e}")
 
-        rows = conn.execute(f"""
-            SELECT type, generated_at, period_start, period_end, content
-            FROM recaps
-            {where}
-            ORDER BY period_start ASC
-        """, params).fetchall()
+        # Monthly recaps
+        m_conditions = []
+        m_params = []
+        if start:
+            m_conditions.append("period_end >= ?")
+            m_params.append(start.isoformat())
+        if end:
+            m_conditions.append("period_start <= ?")
+            m_params.append(end.isoformat())
+        m_where = ("WHERE " + " AND ".join(m_conditions)) if m_conditions else ""
+        try:
+            rows = conn.execute(f"""
+                SELECT 'monthly' AS type, created_at AS generated_at,
+                       period_start, period_end,
+                       summary AS content
+                FROM monthly_recaps
+                {m_where}
+                ORDER BY period_start ASC
+            """, m_params).fetchall()
+            results.extend([dict(r) for r in rows])
+        except Exception as e:
+            log.warning(f"Could not fetch monthly recaps for export: {e}")
 
-        return [dict(r) for r in rows]
-    except Exception:
-        # recaps table might not exist yet on older databases
-        return []
+        results.sort(key=lambda r: r.get("period_start", ""))
+        return results
     finally:
         conn.close()
 
@@ -200,7 +237,7 @@ def _build_txt(entries: list, recaps: list) -> str:
         metric_parts = []
         for key, label in [
             ("mood", "MOOD"), ("stress", "STRESS"), ("energy", "ENERGY"),
-            ("anxiety", "ANXIETY"), ("clarity", "CLARITY")
+            ("anxiety", "ANXIETY"), ("mental_clarity", "CLARITY")
         ]:
             score = _fmt_score(entry.get(key))
             if score:
@@ -363,7 +400,7 @@ def _build_pdf(entries: list, recaps: list) -> bytes:
         metric_parts = []
         for key, label in [
             ("mood", "MOOD"), ("stress", "STRESS"), ("energy", "ENERGY"),
-            ("anxiety", "ANXIETY"), ("clarity", "CLARITY")
+            ("anxiety", "ANXIETY"), ("mental_clarity", "CLARITY")
         ]:
             score = _fmt_score(entry.get(key))
             if score:

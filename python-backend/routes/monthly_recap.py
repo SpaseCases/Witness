@@ -1,3 +1,5 @@
+# Bug fix: generate() call updated with num_ctx=16384 and repeat_penalty=1.1;
+#          temperature corrected to 0.6 per task table (was 0.55).
 """
 WITNESS -- Monthly Recap API
 
@@ -14,7 +16,6 @@ Requires at least 5 entries in the 30-day window.
 import json
 import logging
 from datetime import date, timedelta, datetime
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
@@ -277,7 +278,7 @@ def build_prompt(data: dict) -> str:
 
 async def generate_and_cache(start: str, end: str, data: dict, conn) -> dict:
     prompt   = build_prompt(data)
-    response = await generate(prompt, temperature=0.55, max_tokens=1400)
+    response = await generate(prompt, temperature=0.6, max_tokens=1400, num_ctx=16384, repeat_penalty=1.1)
 
     try:
         clean  = clean_llm_json(response)

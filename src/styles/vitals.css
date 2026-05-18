@@ -1079,3 +1079,154 @@
   border-top: 1px solid rgba(255,255,255,0.05);
   padding-top: 0.5rem;
 }
+
+
+/* ── SCREEN TIME PANEL ───────────────────────────────────────────────────── */
+
+.vt-st-panel {
+  background: #111;
+  border: 1px solid #1e1e1e;
+  padding: 18px 20px 16px;
+  margin-bottom: 18px;
+}
+
+.vt-st-header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.vt-st-hint {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: #383838;
+}
+
+.vt-st-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.vt-st-date {
+  background: #181818;
+  border: 1px solid #2a2a2a;
+  color: #a09080;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 6px 10px;
+  outline: none;
+  cursor: pointer;
+}
+
+.vt-st-date:focus { border-color: var(--accent); }
+
+.vt-st-date::-webkit-calendar-picker-indicator {
+  filter: invert(0.4);
+  cursor: pointer;
+}
+
+.vt-st-time-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vt-st-num {
+  width: 48px;
+  background: #181818;
+  border: 1px solid #2a2a2a;
+  color: #d0c0a8;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: center;
+  padding: 5px 4px;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.vt-st-num::-webkit-inner-spin-button,
+.vt-st-num::-webkit-outer-spin-button { -webkit-appearance: none; }
+
+.vt-st-num:focus { border-color: var(--accent); }
+
+.vt-st-sep {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #383838;
+}
+
+.vt-st-save-btn {
+  background: transparent;
+  border: 1px solid #2a2a2a;
+  color: #505050;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.vt-st-save-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.vt-st-save-btn:disabled { opacity: 0.4; cursor: default; }
+
+.vt-st-banner {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: #50a870;
+}
+
+.vt-st-banner-err { color: #e05050; }
+
+/* Log rows */
+
+.vt-st-log {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.vt-st-log-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 56px;
+  align-items: center;
+  gap: 10px;
+}
+
+.vt-st-log-date {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.05em;
+  color: #383838;
+}
+
+.vt-st-log-bar-wrap {
+  background: #1a1a1a;
+  height: 4px;
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.vt-st-log-bar {
+  height: 100%;
+  background: #e0a030;
+  transition: width 0.3s ease;
+}
+
+.vt-st-log-val {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: #e0a030;
+  text-align: right;
+}

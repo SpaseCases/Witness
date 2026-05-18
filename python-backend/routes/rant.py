@@ -1,3 +1,5 @@
+# Bug fix: redundant re.sub(<think>) removed — generate() handles this
+#          centrally; tag extraction temperature corrected to 0.1 (JSON/deterministic).
 """
 witness/python-backend/routes/rant.py
 
@@ -89,9 +91,8 @@ Transcript:
 Tags:"""
 
     try:
-        raw  = await generate(prompt=prompt, temperature=0.3, max_tokens=256)
-        # Strip DeepSeek <think> tags
-        raw  = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
+        raw  = await generate(prompt=prompt, temperature=0.1, max_tokens=256)
+        # generate() already strips <think> blocks centrally
         tags = extract_json_array(raw)
 
         if not tags and raw:

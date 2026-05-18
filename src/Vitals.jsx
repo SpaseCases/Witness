@@ -4,6 +4,13 @@
  *   1. CORRELATION tab added — dual-axis SVG chart + AI analysis panel
  *   2. Tab bar added at top of content area to switch between OVERVIEW and CORRELATION
  *
+ * Bug fixes (batch 10):
+ *   - CorrelationTab.runAnalysis: res.json() called before res.ok check. A
+ *     non-JSON 500 response body throws a confusing SyntaxError. Fixed: res.ok
+ *     checked first, then res.json() only on success.
+ *   - ScreenTimePanel.fmtMinsShort: returned "0h" for 0-minute records from DB.
+ *     Added null/zero guard to return "—" instead.
+ *
  * Save this file at: witness/src/Vitals.jsx
  */
 
@@ -754,32 +761,35 @@ function AutoUploadInfo({ autoStatus }) {
 // Right Y-axis: health metrics (auto-scaled to data range)
 
 const METRIC_COLORS = {
-  stress:           '#e05050',
-  mood:             '#f5a830',
-  energy:           '#50a870',
-  anxiety:          '#a070f0',
-  hrv:              '#5090f0',
-  sleep_total_mins: '#70c0d0',
-  sleep_deep_mins:  '#3070a0',
-  resting_hr:       '#f07050',
+  stress:            '#e05050',
+  mood:              '#f5a830',
+  energy:            '#50a870',
+  anxiety:           '#a070f0',
+  hrv:               '#5090f0',
+  sleep_total_mins:  '#70c0d0',
+  sleep_deep_mins:   '#3070a0',
+  resting_hr:        '#f07050',
+  screen_time_mins:  '#e0a030',
 }
 
 const METRIC_LABELS = {
-  stress:           'STRESS',
-  mood:             'MOOD',
-  energy:           'ENERGY',
-  anxiety:          'ANXIETY',
-  hrv:              'HRV',
-  sleep_total_mins: 'SLEEP TOTAL',
-  sleep_deep_mins:  'SLEEP DEEP',
-  resting_hr:       'RESTING HR',
+  stress:            'STRESS',
+  mood:              'MOOD',
+  energy:            'ENERGY',
+  anxiety:           'ANXIETY',
+  hrv:               'HRV',
+  sleep_total_mins:  'SLEEP TOTAL',
+  sleep_deep_mins:   'SLEEP DEEP',
+  resting_hr:        'RESTING HR',
+  screen_time_mins:  'SCREEN TIME',
 }
 
 const METRIC_UNITS = {
-  hrv:              ' ms',
-  sleep_total_mins: ' min',
-  sleep_deep_mins:  ' min',
-  resting_hr:       ' bpm',
+  hrv:               ' ms',
+  sleep_total_mins:  ' min',
+  sleep_deep_mins:   ' min',
+  resting_hr:        ' bpm',
+  screen_time_mins:  ' min',
 }
 
 function CorrelationChart({ data, journalMetrics, healthMetrics }) {
@@ -1071,7 +1081,134 @@ function CorrelationChart({ data, journalMetrics, healthMetrics }) {
 // ─── CORRELATION TAB ─────────────────────────────────────────────────────────
 
 const JOURNAL_TOGGLES = ['stress', 'mood', 'energy', 'anxiety']
-const HEALTH_TOGGLES  = ['hrv', 'sleep_total_mins', 'sleep_deep_mins', 'resting_hr']
+const HEALTH_TOGGLES  = ['hrv', 'sleep_total_mins', 'sleep_deep_mins', 'resting_hr', 'screen_time_mins']
+
+// ─── SCREEN TIME PANEL ───────────────────────────────────────────────────────
+
+function ScreenTimePanel() {
+  const [hours,   setHours]   = useState('')
+  const [minutes, setMinutes] = useState('')
+  const [date,    setDate]    = useState(() => new Date().toISOString().slice(0, 10))
+  const [log,     setLog]     = useState([])
+  const [saving,  setSaving]  = useState(false)
+  const [banner,  setBanner]  = useState(null)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/health/screen-time?days=14`)
+      if (res.ok) setLog(await res.json())
+    } catch {}
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const save = async () => {
+    const h = parseInt(hours  || '0', 10)
+    const m = parseInt(minutes || '0', 10)
+    if (isNaN(h) || isNaN(m) || (h === 0 && m === 0)) {
+      setBanner({ type: 'err', msg: 'ENTER A TIME ABOVE ZERO' }); return
+    }
+    const total = h * 60 + m
+    setSaving(true)
+    try {
+      const res = await fetch(`${API}/health/screen-time`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, screen_time_mins: total })
+      })
+      if (res.ok) {
+        setBanner({ type: 'ok', msg: `SAVED — ${date}` })
+        setHours(''); setMinutes('')
+        await load()
+      } else {
+        setBanner({ type: 'err', msg: 'SAVE FAILED' })
+      }
+    } catch {
+      setBanner({ type: 'err', msg: 'NETWORK ERROR' })
+    } finally {
+      setSaving(false)
+      setTimeout(() => setBanner(null), 2500)
+    }
+  }
+
+  const fmtMinsShort = (m) => {
+    if (m == null || m === 0) return '—'
+    const h = Math.floor(m / 60), min = Math.round(m % 60)
+    return min > 0 ? `${h}h ${min}m` : `${h}h`
+  }
+
+  const barWidth = (mins) => {
+    if (!log.length || mins == null) return 0
+    const max = Math.max(...log.map(r => r.screen_time_mins || 0))
+    return max > 0 ? Math.round((mins / max) * 100) : 0
+  }
+
+  return (
+    <div className="vt-st-panel">
+      <div className="vt-st-header">
+        <span className="vt-section-label">SCREEN TIME</span>
+        <span className="vt-st-hint">Enter your daily total from iPhone Settings → Screen Time</span>
+      </div>
+
+      <div className="vt-st-form">
+        <input
+          className="vt-st-date"
+          type="date"
+          value={date}
+          onChange={e => setDate(e.target.value)}
+        />
+        <div className="vt-st-time-inputs">
+          <input
+            className="vt-st-num"
+            type="number"
+            min="0"
+            max="23"
+            placeholder="0"
+            value={hours}
+            onChange={e => setHours(e.target.value)}
+          />
+          <span className="vt-st-sep">H</span>
+          <input
+            className="vt-st-num"
+            type="number"
+            min="0"
+            max="59"
+            placeholder="0"
+            value={minutes}
+            onChange={e => setMinutes(e.target.value)}
+          />
+          <span className="vt-st-sep">M</span>
+        </div>
+        <button className="vt-st-save-btn" onClick={save} disabled={saving}>
+          {saving ? '...' : 'SAVE'}
+        </button>
+        {banner && (
+          <span className={`vt-st-banner ${banner.type === 'err' ? 'vt-st-banner-err' : ''}`}>
+            {banner.msg}
+          </span>
+        )}
+      </div>
+
+      {log.length > 0 && (
+        <div className="vt-st-log">
+          {log.map(row => (
+            <div key={row.date} className="vt-st-log-row">
+              <span className="vt-st-log-date">{row.date}</span>
+              <div className="vt-st-log-bar-wrap">
+                <div
+                  className="vt-st-log-bar"
+                  style={{ width: `${barWidth(row.screen_time_mins)}%` }}
+                />
+              </div>
+              <span className="vt-st-log-val">{fmtMinsShort(row.screen_time_mins)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 
 function CorrelationTab() {
   const [selectedDays,   setSelectedDays]   = useState(30)
@@ -1120,13 +1257,14 @@ function CorrelationTab() {
     setAnalyzing(true)
     setAnalysisError(null)
     try {
-      const res  = await fetch(`${API}/health/correlation/analyze`, {
+      const res = await fetch(`${API}/health/correlation/analyze`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ days: selectedDays }),
       })
+      // Check ok before .json() — a non-JSON 500 body throws a confusing SyntaxError
+      if (!res.ok) throw new Error(`Backend returned ${res.status}`)
       const json = await res.json()
-      if (!res.ok) throw new Error(json.detail || 'Analysis failed')
       if (json.error === 'not_enough_data') {
         setAnalysisError('not_enough_data')
         setAnalysis(null)
@@ -1135,6 +1273,7 @@ function CorrelationTab() {
         setAnalysisError(null)
       }
     } catch (e) {
+      console.warn('[Vitals] runAnalysis failed:', e.message)
       setAnalysisError('error')
     } finally {
       setAnalyzing(false)
@@ -1445,6 +1584,8 @@ export default function Vitals() {
               <StatCard label="AVG STEPS"  value={stats.steps != null ? Math.round(stats.steps).toLocaleString() : null} color="#50a870" sub={`${days}D AVG`} />
               <StatCard label="ACTIVE CAL" value={stats.calories != null ? Math.round(stats.calories) : null} unit="kcal" color="#c38c32" sub={`${days}D AVG`} />
             </div>
+
+            <ScreenTimePanel />
 
             <ChartBlock title="HRV VS STRESS OVERLAY" hint="CYAN = HRV (ms) · RED DASHED = STRESS (1-10)">
               <OverlayChart data={overlay} />

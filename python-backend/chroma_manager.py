@@ -1,3 +1,4 @@
+# Bug fix: thread-safe lazy init (Lock), None-safe metadata, int-cast search results, logged chroma_status errors
 """
 witness/python-backend/chroma_manager.py
 
@@ -22,6 +23,7 @@ so the app continues working with keyword search only.
 """
 
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -39,45 +41,53 @@ COLLECTION_NAME = "witness_entries"
 
 _client     = None
 _collection = None
+_init_lock  = threading.Lock()  # prevents race condition on concurrent first-call from background threads
 
 
 def _get_collection():
     """
     Return the ChromaDB collection, initializing it on first call.
     Returns None if ChromaDB cannot be initialized — app continues without it.
+    Thread-safe: uses a lock to prevent concurrent initialization from background threads.
     """
     global _client, _collection
 
+    # Fast path — already initialized (no lock needed after first successful init)
     if _collection is not None:
         return _collection
 
-    try:
-        import chromadb
-        from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+    # Slow path — acquire lock and re-check (double-checked locking pattern)
+    with _init_lock:
+        if _collection is not None:
+            return _collection
 
-        CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            import chromadb
+            from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
-        _client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+            CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 
-        # DefaultEmbeddingFunction uses a small local sentence-transformer model.
-        # First run downloads it (~22 MB) to a local cache — after that, no internet needed.
-        embedding_fn = DefaultEmbeddingFunction()
+            _client = chromadb.PersistentClient(path=str(CHROMA_DIR))
 
-        _collection = _client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=embedding_fn,
-            metadata={"hnsw:space": "cosine"}  # cosine similarity -- best for text meaning
-        )
+            # DefaultEmbeddingFunction uses a small local sentence-transformer model.
+            # First run downloads it (~22 MB) to a local cache — after that, no internet needed.
+            embedding_fn = DefaultEmbeddingFunction()
 
-        log.info(
-            f"ChromaDB ready. Collection '{COLLECTION_NAME}' "
-            f"has {_collection.count()} entries."
-        )
-        return _collection
+            _collection = _client.get_or_create_collection(
+                name=COLLECTION_NAME,
+                embedding_function=embedding_fn,
+                metadata={"hnsw:space": "cosine"}  # cosine similarity -- best for text meaning
+            )
 
-    except Exception as e:
-        log.warning(f"ChromaDB init failed -- semantic search disabled. Reason: {e}")
-        return None
+            log.info(
+                f"ChromaDB ready. Collection '{COLLECTION_NAME}' "
+                f"has {_collection.count()} entries."
+            )
+            return _collection
+
+        except Exception as e:
+            log.warning(f"ChromaDB init failed -- semantic search disabled. Reason: {e}")
+            return None
 
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
@@ -107,14 +117,15 @@ def embed_entry(entry_id: int, text: str, entry_date: str = "") -> Optional[str]
 
     try:
         chroma_id = f"entry_{entry_id}"
+        # ChromaDB metadata values must be str/int/float/bool — never None.
+        # Build the dict conditionally so absent optional fields are omitted.
+        meta: dict = {"type": "daily", "entry_id": int(entry_id)}
+        if entry_date:
+            meta["entry_date"] = entry_date
         col.upsert(
             ids=[chroma_id],
             documents=[text.strip()],
-            metadatas=[{
-                "type":       "daily",
-                "entry_id":   entry_id,
-                "entry_date": entry_date,
-            }]
+            metadatas=[meta]
         )
         log.debug(f"Embedded journal entry {entry_id} as '{chroma_id}'")
         return chroma_id
@@ -146,14 +157,13 @@ def embed_rant(rant_id: int, text: str, created_at: str = "") -> Optional[str]:
 
     try:
         chroma_id = f"rant_{rant_id}"
+        meta: dict = {"type": "rant", "rant_id": int(rant_id)}
+        if created_at:
+            meta["entry_date"] = created_at[:10]
         col.upsert(
             ids=[chroma_id],
             documents=[text.strip()],
-            metadatas=[{
-                "type":       "rant",
-                "rant_id":    rant_id,
-                "entry_date": created_at[:10] if created_at else "",
-            }]
+            metadatas=[meta]
         )
         log.debug(f"Embedded rant {rant_id} as '{chroma_id}'")
         return chroma_id
@@ -212,11 +222,14 @@ def semantic_search(query: str, n_results: int = 10) -> list[dict]:
 
         for chroma_id, meta, dist in zip(ids, metadatas, distances):
             entry_type = meta.get("type", "daily")
+            raw_entry_id = meta.get("entry_id")
+            raw_rant_id  = meta.get("rant_id")
             output.append({
                 "chroma_id":  chroma_id,
                 "type":       entry_type,
-                "entry_id":   meta.get("entry_id"),
-                "rant_id":    meta.get("rant_id"),
+                # Cast to int — ChromaDB can return int metadata as float in some versions
+                "entry_id":   int(raw_entry_id) if raw_entry_id is not None else None,
+                "rant_id":    int(raw_rant_id)  if raw_rant_id  is not None else None,
                 "entry_date": meta.get("entry_date", ""),
                 "distance":   round(dist, 4),
             })
@@ -261,5 +274,6 @@ def chroma_status() -> dict:
         return {"available": False, "count": 0}
     try:
         return {"available": True, "count": col.count()}
-    except Exception:
+    except Exception as e:
+        log.warning(f"chroma_status() count failed: {e}")
         return {"available": False, "count": 0}

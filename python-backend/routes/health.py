@@ -1,3 +1,7 @@
+# Bug fix: import re moved to top level; redundant <think> stripping removed from
+#          analyze_correlation (generate() handles it centrally); correlated
+#          subqueries in all three correlation endpoints replaced with explicit
+#          INNER JOIN on entries for better performance and correctness.
 """
 WITNESS — Health Data API  (Step 13 revised + Correlation feature)
 Parses Apple Health XML exports with iterparse (memory-safe for 100MB+ files)
@@ -29,8 +33,10 @@ Endpoints:
 import xml.etree.ElementTree as ET
 import json
 import logging
+import re
 import shutil
-from datetime import datetime, date, timedelta
+import socket
+from datetime import datetime, date
 from pathlib import Path
 from typing import Optional
 from collections import defaultdict
@@ -41,6 +47,11 @@ from database import get_conn
 
 log    = logging.getLogger("witness.health")
 router = APIRouter()
+
+
+class ScreenTimeEntry(BaseModel):
+    date:             str    # YYYY-MM-DD
+    screen_time_mins: float  # total minutes
 
 # ─── PATHS ───────────────────────────────────────────────────────────────────
 # health-inbox/ lives next to the python-backend folder.
@@ -490,16 +501,92 @@ async def auto_import_health(file: UploadFile = File(...)):
 @router.get("/auto-status")
 def get_auto_status():
     """
-    Returns the status of both auto-import channels for the VITALS UI.
+    Returns auto-import channel status, PC local IP, and last import info.
     """
     state = _load_auto_state()
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        pc_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pc_ip = "127.0.0.1"
+
+    conn = get_conn()
+    try:
+        last_row = conn.execute(
+            "SELECT imported_at, filename FROM health_imports ORDER BY imported_at DESC LIMIT 1"
+        ).fetchone()
+        last_import = dict(last_row) if last_row else None
+    finally:
+        conn.close()
+
     return {
-        "folder_watch":          True,   # always active — runs on startup
-        "folder_last_import":    state.get("folder_last_import"),
-        "endpoint_ready":        True,   # always live while backend is running
-        "endpoint_last_import":  state.get("endpoint_last_import"),
-        "inbox_path":            str(INBOX_DIR),
+        "folder_watch":         True,
+        "folder_last_import":   state.get("folder_last_import"),
+        "endpoint_ready":       True,
+        "endpoint_last_import": state.get("endpoint_last_import"),
+        "inbox_path":           str(INBOX_DIR.resolve()),
+        "pc_local_ip":          pc_ip,
+        "auto_import_url":      f"http://{pc_ip}:8000/health/auto-import",
+        "last_import":          last_import,
     }
+
+
+@router.patch("/screen-time")
+def set_screen_time(body: ScreenTimeEntry):
+    """
+    Manually set screen time for a specific date (hours read from iPhone Screen Time app).
+    Creates a stub health_data row if none exists for that date.
+    """
+    try:
+        datetime.strptime(body.date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+
+    if body.screen_time_mins < 0:
+        raise HTTPException(status_code=400, detail="screen_time_mins cannot be negative")
+
+    conn = get_conn()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM health_data WHERE date = ?", (body.date,)
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                "UPDATE health_data SET screen_time_mins = ? WHERE date = ?",
+                (body.screen_time_mins, body.date)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO health_data (date, screen_time_mins) VALUES (?, ?)",
+                (body.date, body.screen_time_mins)
+            )
+
+        conn.commit()
+        row = conn.execute("SELECT * FROM health_data WHERE date = ?", (body.date,)).fetchone()
+        log.info(f"Screen time set: {body.date} = {body.screen_time_mins:.0f} mins")
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@router.get("/screen-time")
+def get_screen_time_log(days: int = 14):
+    """Return recent screen time entries for the manual log."""
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT date, screen_time_mins FROM health_data
+            WHERE screen_time_mins IS NOT NULL
+              AND date >= date('now', ?)
+            ORDER BY date DESC
+        """, (f"-{days} days",)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 @router.get("/data")
@@ -634,10 +721,9 @@ def get_correlation_data(days: int = 30):
                 hd.sleep_deep_mins              AS sleep_deep_mins,
                 hd.sleep_rem_mins               AS sleep_rem_mins
             FROM health_data hd
-            INNER JOIN metrics m
-                ON hd.date = DATE(
-                    (SELECT je.date FROM entries je WHERE je.id = m.entry_id)
-                )
+            INNER JOIN metrics m ON m.entry_id IS NOT NULL
+            INNER JOIN entries e ON e.id = m.entry_id
+                AND hd.date = DATE(e.date)
             WHERE hd.date >= date('now', ?)
             ORDER BY hd.date ASC
         """, (f"-{days} days",)).fetchall()
@@ -662,10 +748,9 @@ def get_correlation_summary(days: int = 30):
                 hd.hrv              AS hrv,
                 hd.sleep_total_mins AS sleep_total_mins
             FROM health_data hd
-            INNER JOIN metrics m
-                ON hd.date = DATE(
-                    (SELECT je.date FROM entries je WHERE je.id = m.entry_id)
-                )
+            INNER JOIN metrics m ON m.entry_id IS NOT NULL
+            INNER JOIN entries e ON e.id = m.entry_id
+                AND hd.date = DATE(e.date)
             WHERE hd.date >= date('now', ?)
             ORDER BY hd.date ASC
         """, (f"-{days} days",)).fetchall()
@@ -723,12 +808,12 @@ async def analyze_correlation(body: CorrelationAnalyzeRequest):
                 hd.date                         AS date,
                 m.stress                        AS stress,
                 hd.hrv                          AS hrv,
-                hd.sleep_total_mins             AS sleep_total_mins
+                hd.sleep_total_mins             AS sleep_total_mins,
+                hd.screen_time_mins             AS screen_time_mins
             FROM health_data hd
-            INNER JOIN metrics m
-                ON hd.date = DATE(
-                    (SELECT je.date FROM entries je WHERE je.id = m.entry_id)
-                )
+            INNER JOIN metrics m ON m.entry_id IS NOT NULL
+            INNER JOIN entries e ON e.id = m.entry_id
+                AND hd.date = DATE(e.date)
             WHERE hd.date >= date('now', ?)
             ORDER BY hd.date ASC
         """, (f"-{days} days",)).fetchall()
@@ -743,25 +828,24 @@ async def analyze_correlation(body: CorrelationAnalyzeRequest):
         }
 
     # Build a compact text table for the AI
-    lines = ["DATE       | STRESS | HRV (ms) | SLEEP (hrs)", "-" * 46]
+    lines = ["DATE       | STRESS | HRV (ms) | SLEEP (hrs) | SCREEN (hrs)", "-" * 60]
     for r in rows:
-        stress_str = f"{r['stress']:.1f}" if r["stress"] is not None else "null"
-        hrv_str    = f"{r['hrv']:.1f}"    if r["hrv"]    is not None else "null"
-        if r["sleep_total_mins"] is not None:
-            sleep_str = f"{r['sleep_total_mins'] / 60:.1f}"
-        else:
-            sleep_str = "null"
-        lines.append(f"{r['date']} | {stress_str:>6} | {hrv_str:>8} | {sleep_str:>10}")
+        stress_str = f"{r['stress']:.1f}"            if r["stress"]           is not None else "null"
+        hrv_str    = f"{r['hrv']:.1f}"               if r["hrv"]              is not None else "null"
+        sleep_str  = f"{r['sleep_total_mins']/60:.1f}" if r["sleep_total_mins"] is not None else "null"
+        screen_str = f"{r['screen_time_mins']/60:.1f}" if r["screen_time_mins"] is not None else "null"
+        lines.append(f"{r['date']} | {stress_str:>6} | {hrv_str:>8} | {sleep_str:>11} | {screen_str:>11}")
 
     data_table = "\n".join(lines)
 
     prompt = (
         "You are analyzing personal journal and health data. "
-        "The data below shows daily stress score (1-10, higher = more stressed), "
+        "The data shows daily stress score (1-10, higher = more stressed), "
         "HRV in milliseconds (higher = better recovery), "
-        "and total sleep in hours. "
-        "Identify 2-3 honest, specific patterns you notice. "
-        "Cite the actual dates or date ranges where you see the pattern. "
+        "total sleep in hours, and total phone screen time in hours. "
+        "Identify 2-3 honest, specific patterns you notice — "
+        "including any relationship between screen time and mood or stress. "
+        "Cite actual dates or date ranges. "
         "Do not give advice. Do not soften observations. Do not use em dashes. "
         "Write in plain sentences. Maximum 150 words.\n\n"
         f"DATA:\n{data_table}"
@@ -770,12 +854,8 @@ async def analyze_correlation(body: CorrelationAnalyzeRequest):
     try:
         raw = await generate(prompt=prompt, temperature=0.4, max_tokens=400)
 
-        # Strip DeepSeek / other model think tags
-        import re
-        clean = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-
         return {
-            "analysis":      clean,
+            "analysis":      raw.strip(),
             "days_analyzed": len(rows),
             "generated_at":  datetime.now().isoformat(),
         }

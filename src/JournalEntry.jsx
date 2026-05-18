@@ -1,19 +1,23 @@
 /**
- * WITNESS — Journal Entry Screen (Step 16)
+ * WITNESS — Journal Entry Screen
+ * Updated: Added model_loading message handling from WebSocket.
+ *          When the backend sends {"type": "model_loading"}, a muted notice
+ *          appears below the waveform: "WHISPER LOADING — LIVE PREVIEW STARTING SHORTLY"
+ *          The first partial transcript arrival clears this message automatically.
+ *          Recording is never blocked — this is informational only.
+ *
+ * Bug fixes (batch 8):
+ *   - recorder.onstop stale closure: handleRecordingComplete now stored in a ref so
+ *     onstop always calls the latest version regardless of when recording stops.
+ *   - WaveformCanvas received analyserRef.current (stale null) instead of the ref
+ *     object itself — waveform never animated during recording. Fixed by passing the
+ *     ref and reading .current inside the canvas effect.
+ *   - handleRecordingComplete dep array was [] but called fetchQuestions — added dep.
+ *   - startRecording dep array missing handleRecordingComplete (moot after ref fix,
+ *     but corrected for accuracy).
  *
  * Save this file at: witness/src/JournalEntry.jsx
- * Replace the existing file completely.
- *
- * What changed from Step 12:
- *   - Real-time transcription via WebSocket.
- *     As you speak, partial transcript text appears live in the editor.
- *     When you stop, the full audio is uploaded for the clean final transcript.
- *     The final version replaces the partial — you see text the whole time.
- *   - WebSocket connects on record start, disconnects on stop.
- *   - Partial text appears in the transcript box with a blinking cursor indicator.
- *   - If the WebSocket fails (backend unreachable), recording still works —
- *     it falls back silently to the existing batch-upload-only flow.
- *   - All other behavior (questions, metrics, save, star) is unchanged.
+ * Replace the entire file.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -23,8 +27,11 @@ const API    = 'http://127.0.0.1:8000'
 const WS_URL = 'ws://127.0.0.1:8000/transcribe/stream'
 
 // ─── WAVEFORM VISUALIZER ──────────────────────────────────────────────────────
+// Receives the analyserRef object (not .current) so it always reads the live value.
+// Passing analyserRef.current would snapshot null at render time before recording
+// starts and the canvas effect would never see the real analyser node.
 
-function WaveformCanvas({ analyser, isRecording, isPaused }) {
+function WaveformCanvas({ analyserRef, isRecording, isPaused }) {
   const canvasRef = useRef(null)
   const animRef   = useRef(null)
 
@@ -60,6 +67,7 @@ function WaveformCanvas({ analyser, isRecording, isPaused }) {
     }
 
     const drawActive = () => {
+      const analyser = analyserRef.current   // read live ref value on every frame
       if (!analyser) return
       const bufferLength = analyser.frequencyBinCount
       const dataArray    = new Uint8Array(bufferLength)
@@ -81,7 +89,7 @@ function WaveformCanvas({ analyser, isRecording, isPaused }) {
     }
 
     const loop = () => {
-      if (isRecording && !isPaused && analyser) drawActive()
+      if (isRecording && !isPaused) drawActive()
       else drawIdle()
       animRef.current = requestAnimationFrame(loop)
     }
@@ -91,7 +99,7 @@ function WaveformCanvas({ analyser, isRecording, isPaused }) {
       cancelAnimationFrame(animRef.current)
       ro.disconnect()
     }
-  }, [analyser, isRecording, isPaused])
+  }, [analyserRef, isRecording, isPaused])
 
   return (
     <canvas
@@ -161,17 +169,18 @@ function QuestionCard({ question, index, answer, onChange }) {
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
 export default function JournalEntry({ onSaved }) {
-  const [status,      setStatus]      = useState('idle')
-  const [isRecording, setIsRecording] = useState(false)
-  const [isPaused,    setIsPaused]    = useState(false)
-  const [seconds,     setSeconds]     = useState(0)
-  const [errorMsg,    setErrorMsg]    = useState('')
-  const [transcript,  setTranscript]  = useState('')
-  const [isPartial,   setIsPartial]   = useState(false)   // true while live partial text is shown
-  const [isLive,      setIsLive]      = useState(false)   // true if WebSocket connected OK
-  const [questions,   setQuestions]   = useState([])
-  const [answers,     setAnswers]     = useState({})
-  const [starred,     setStarred]     = useState(false)
+  const [status,         setStatus]         = useState('idle')
+  const [isRecording,    setIsRecording]    = useState(false)
+  const [isPaused,       setIsPaused]       = useState(false)
+  const [seconds,        setSeconds]        = useState(0)
+  const [errorMsg,       setErrorMsg]       = useState('')
+  const [transcript,     setTranscript]     = useState('')
+  const [isPartial,      setIsPartial]      = useState(false)   // true while live partial text is shown
+  const [isLive,         setIsLive]         = useState(false)   // true if WebSocket connected OK
+  const [modelLoading,   setModelLoading]   = useState(false)   // true when backend says turbo is loading
+  const [questions,      setQuestions]      = useState([])
+  const [answers,        setAnswers]        = useState({})
+  const [starred,        setStarred]        = useState(false)
 
   const mediaRecorderRef = useRef(null)
   const audioContextRef  = useRef(null)
@@ -180,7 +189,9 @@ export default function JournalEntry({ onSaved }) {
   const timerRef         = useRef(null)
   const savedEntryIdRef  = useRef(null)
   const waveformRef      = useRef(null)
-  const wsRef            = useRef(null)           // WebSocket reference
+  const wsRef            = useRef(null)
+  // Ref to always-current handleRecordingComplete — avoids stale closure in recorder.onstop
+  const handleRecordingCompleteRef = useRef(null)
 
   // ── Timer ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -204,8 +215,6 @@ export default function JournalEntry({ onSaved }) {
   }, [])
 
   // ─── Open WebSocket for live partials ─────────────────────────────────────
-  // Called right before recording starts. If it fails, we just don't show
-  // live partials — the batch upload at the end still works fine.
 
   const openWebSocket = useCallback(() => {
     try {
@@ -219,29 +228,41 @@ export default function JournalEntry({ onSaved }) {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
+
+          if (msg.type === 'model_loading') {
+            // Turbo model is still loading on the backend — this is informational.
+            // Recording and live preview (base model) still work fine.
+            setModelLoading(true)
+          }
+
           if (msg.type === 'partial' && msg.text) {
-            // Show the live partial text while still recording
+            // First partial arrival clears the loading notice automatically.
+            setModelLoading(false)
             setTranscript(msg.text)
             setIsPartial(true)
           }
+
+          if (msg.type === 'error') {
+            console.warn('[WITNESS] WebSocket error from backend:', msg.text)
+          }
+
         } catch {
           // Ignore malformed messages
         }
       }
 
       ws.onerror = () => {
-        // WebSocket failed — fall back to batch-only, no live partials
         setIsLive(false)
         wsRef.current = null
       }
 
       ws.onclose = () => {
         setIsLive(false)
+        setModelLoading(false)
         wsRef.current = null
       }
 
     } catch {
-      // WebSocket not supported or connection refused — ignore
       setIsLive(false)
     }
   }, [])
@@ -274,7 +295,6 @@ export default function JournalEntry({ onSaved }) {
         if (e.data.size > 0) {
           chunksRef.current.push(e.data)
 
-          // Forward each audio chunk to the WebSocket for live transcription
           if (wsRef.current?.readyState === WebSocket.OPEN) {
             e.data.arrayBuffer().then(buf => {
               if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -290,13 +310,14 @@ export default function JournalEntry({ onSaved }) {
         audioCtx.close()
         analyserRef.current = null
 
-        // Close the WebSocket — tell the backend recording is done
         if (wsRef.current) {
           wsRef.current.close()
           wsRef.current = null
         }
 
-        await handleRecordingComplete()
+        // Always call via ref so we get the latest memoised version,
+        // not the one captured when startRecording was last memoised.
+        await handleRecordingCompleteRef.current?.()
       }
 
       // Collect a chunk every 500ms — feeds the WebSocket smoothly
@@ -312,6 +333,7 @@ export default function JournalEntry({ onSaved }) {
       setSeconds(0)
       setTranscript('')
       setIsPartial(false)
+      setModelLoading(false)
       setQuestions([])
       setAnswers({})
 
@@ -354,6 +376,40 @@ export default function JournalEntry({ onSaved }) {
     }
   }, [isPaused])
 
+  // ─── Fetch AI questions ───────────────────────────────────────────────────
+
+  const fetchQuestions = useCallback(async (text) => {
+    await new Promise(r => setTimeout(r, 2000))
+
+    try {
+      const res = await fetchWithRetry(`${API}/transcribe/questions`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ transcript: text, count: 3 })
+      })
+
+      if (!res.ok) {
+        console.error(`[WITNESS] Questions API returned HTTP ${res.status}`)
+        setStatus('done')
+        return
+      }
+
+      const data = await res.json()
+
+      if (data.status !== 'ok') {
+        console.warn(`[WITNESS] Questions status: ${data.status}`, data.detail || '')
+      } else {
+        console.log(`[WITNESS] Questions generated: ${data.questions?.length ?? 0} questions`)
+      }
+
+      setQuestions(data.questions || [])
+      setStatus('done')
+    } catch (err) {
+      console.error('[WITNESS] Question generation failed after retries:', err.message)
+      setStatus('done')
+    }
+  }, [])
+
   // ─── Handle complete recording (batch upload for final clean transcript) ──
 
   const handleRecordingComplete = useCallback(async () => {
@@ -391,57 +447,10 @@ export default function JournalEntry({ onSaved }) {
       setErrorMsg(`Transcription failed: ${err.message}. Is the Python backend running?`)
       setStatus('error')
     }
-  }, [])
+  }, [fetchQuestions])
 
-  // ─── Fetch AI questions ───────────────────────────────────────────────────
-  //
-  // FIX: Switched from plain fetch() to fetchWithRetry() so a momentarily
-  // busy backend (just finished a heavy Whisper job) gets retried automatically.
-  //
-  // FIX: The backend now returns a 'status' field. We log it so failures are
-  // visible in DevTools console instead of silently disappearing.
-  //
-  // FIX: A 5-second delay before the questions call gives Ollama time to finish
-  // any concurrent inference (metrics, embeddings) that was just kicked off.
-  // Without this, the questions request sometimes queues behind those calls and
-  // the frontend times out waiting before the model responds.
-
-  const fetchQuestions = useCallback(async (text) => {
-    // Small delay so Ollama isn't context-switching between 3 concurrent calls.
-    // The transcription upload triggers context-update in a background thread;
-    // waiting 2s here lets that thread get its slot before questions compete.
-    await new Promise(r => setTimeout(r, 2000))
-
-    try {
-      const res = await fetchWithRetry(`${API}/transcribe/questions`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ transcript: text, count: 3 })
-      })
-
-      if (!res.ok) {
-        console.error(`[WITNESS] Questions API returned HTTP ${res.status}`)
-        setStatus('done')
-        return
-      }
-
-      const data = await res.json()
-
-      // Log the backend status so failures are visible in DevTools console
-      if (data.status !== 'ok') {
-        console.warn(`[WITNESS] Questions status: ${data.status}`, data.detail || '')
-      } else {
-        console.log(`[WITNESS] Questions generated: ${data.questions?.length ?? 0} questions`)
-      }
-
-      setQuestions(data.questions || [])
-      setStatus('done')
-    } catch (err) {
-      // fetchWithRetry exhausted all retries — backend is genuinely unreachable
-      console.error('[WITNESS] Question generation failed after retries:', err.message)
-      setStatus('done')
-    }
-  }, [])
+  // Keep the ref in sync so recorder.onstop always calls the latest version
+  handleRecordingCompleteRef.current = handleRecordingComplete
 
   // ─── Save entry ───────────────────────────────────────────────────────────
 
@@ -481,7 +490,7 @@ export default function JournalEntry({ onSaved }) {
         }
       }
 
-      // Fire-and-forget metric extraction (correct route + body)
+      // Fire-and-forget metric extraction
       fetch(`${API}/transcribe/extract-metrics`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -495,7 +504,7 @@ export default function JournalEntry({ onSaved }) {
         body:    JSON.stringify({ entry_id: entryId, transcript, entry_date: today })
       }).catch(() => {})
 
-      // Fire-and-forget structured summary (one-sentence + bullet highlights)
+      // Fire-and-forget structured summary
       fetch(`${API}/transcribe/summarize`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -509,7 +518,7 @@ export default function JournalEntry({ onSaved }) {
         body:    JSON.stringify({ transcript, entry_id: entryId })
       }).catch(() => {})
 
-      // Fire-and-forget AI todo extraction (populates Tasks screen)
+      // Fire-and-forget AI todo extraction
       fetch(`${API}/transcribe/extract-todos`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -537,6 +546,7 @@ export default function JournalEntry({ onSaved }) {
     setTranscript('')
     setIsPartial(false)
     setIsLive(false)
+    setModelLoading(false)
     setQuestions([])
     setAnswers({})
     setStarred(false)
@@ -580,11 +590,25 @@ export default function JournalEntry({ onSaved }) {
         {/* WAVEFORM */}
         <div className="je-waveform-block" ref={waveformRef}>
           <WaveformCanvas
-            analyser={analyserRef.current}
+            analyserRef={analyserRef}
             isRecording={isRecording}
             isPaused={isPaused}
           />
           <StatusLine status={status} isLive={isLive} />
+
+          {/* Model loading notice — appears below waveform, clears on first partial */}
+          {modelLoading && isRecording && (
+            <div style={{
+              fontFamily:    'var(--font-mono)',
+              fontSize:      '9px',
+              letterSpacing: '1.5px',
+              color:         '#505050',
+              textAlign:     'center',
+              padding:       '6px 0 2px',
+            }}>
+              WHISPER LOADING — LIVE PREVIEW STARTING SHORTLY
+            </div>
+          )}
         </div>
 
         {/* CONTROLS */}

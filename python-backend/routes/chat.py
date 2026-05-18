@@ -1,157 +1,104 @@
+# Bug fix: removed dead _save_messages() and fixed no-entries path to use
+#          _save_user_message()/_update_assistant_message() so blank assistant
+#          rows are never orphaned; get_messages() now filters empty assistant
+#          placeholder rows; thread auto-title strips to last word boundary;
+#          generate_stream() call now passes explicit temperature/num_ctx;
+#          _get_recall_block() log level lowered to debug (non-fatal noise).
 """
 WITNESS — Journal Chat API
+# Updated: Full overhaul — persistent multi-thread chat with SQLite storage,
+#           entry injection on thread creation, smart recall (ChromaDB only for
+#           recall keywords), memory learning after every AI response.
 
-Lets the user ask natural-language questions about their own journal.
-Uses ChromaDB semantic search to find the most relevant past entries,
-then feeds them to Ollama as grounded context for the answer.
+Thread architecture:
+  - Multiple named threads stored permanently in chat_threads + chat_messages
+  - Threads persist across navigation, restarts, and sessions — never auto-deleted
+  - User can create, rename, and delete threads manually
+  - On new thread creation, last 5 journal entries are silently injected as context
+  - After each AI response, a background thread extracts new user facts for memory
 
 Endpoints:
-  POST /chat/message   — send a question, get a streaming AI response
-  GET  /chat/history   — get past chat messages for this session (in-memory)
+  GET    /chat/threads                    — list all threads (newest first)
+  POST   /chat/threads                    — create a new thread
+  PATCH  /chat/threads/{id}               — rename a thread
+  DELETE /chat/threads/{id}               — delete a thread + all its messages
+  GET    /chat/threads/{id}/messages      — get all messages in a thread
+  DELETE /chat/threads/{id}/messages      — clear messages (keep thread)
+  POST   /chat/threads/{id}/message       — send a message, stream AI response (SSE)
 
-How it works:
-  1. User sends a question ("What have I been stressed about lately?")
-  2. Backend does a semantic search in ChromaDB for the most relevant entries
-  3. Those entries + the question are assembled into a prompt
-  4. Ollama streams the answer back token by token
-  5. Each token is sent to the frontend via Server-Sent Events (SSE)
-
-The AI is instructed to:
-  - Be honest and direct (no wellness-coach voice)
-  - Only cite things that are actually in the entries
-  - Admit when the journal doesn't contain enough info to answer
-  - Reference specific dates when citing evidence
+Retrieval strategy:
+  - RECALL KEYWORDS ("when did", "find", "show me", "what have i said",
+    "last time", "how often"): runs ChromaDB semantic search, appends 3
+    most relevant entries to the user message as RELEVANT PAST ENTRIES.
+  - ALL OTHER QUERIES: trusts conversation history + the entries already
+    injected at thread creation. No fresh ChromaDB lookup.
 """
 
 import json
 import logging
 import re
-from datetime import date, timedelta
+import threading
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from database import get_conn
-from ollama_manager import generate_stream, generate
+from ollama_manager import generate_stream
 
-log = logging.getLogger("witness.chat")
+log    = logging.getLogger("witness.chat")
 router = APIRouter()
 
-# In-memory chat history for the current session (clears on restart — intentional)
-# Keyed by a simple session ID ("default" for single-user desktop app)
-_chat_history: list[dict] = []
-MAX_HISTORY = 40  # keep the last 40 messages
+MAX_HISTORY_MESSAGES = 40
 
+RECALL_KEYWORDS = [
+    "when did", "find", "show me", "what have i said", "last time",
+    "how often", "search", "look up", "go back", "remind me when",
+]
 
-# ─── PROMPT ──────────────────────────────────────────────────────────────────
+CHAT_SYSTEM_PROMPT = """\
+You are a personal journal assistant for an app called Witness.
+You have access to this person's private journal entries.
 
-CHAT_SYSTEM_PROMPT = """You are a personal journal assistant for an app called Witness.
-You have access to the user's private journal entries below.
-
-Your job:
-- Answer their question honestly and specifically, using what they actually wrote
+Rules:
+- Answer honestly and specifically, using what they actually wrote
 - Reference specific dates and direct details from the entries
-- If the entries don't contain enough information to answer, say so plainly
-- Do not make things up or extrapolate beyond what the entries show
+- If the entries don't contain enough to answer, say so plainly
 - Do not soften observations or use wellness-coach language
 - If a pattern is uncomfortable but evidenced, name it directly
-- Keep answers concise — under 300 words unless the question genuinely requires more
+- Keep answers concise unless the question genuinely requires more
 
-Tone: Like a sharp, trusted friend who has read everything you've written — not a therapist, not a chatbot.
+Behavior rules:
+- In the opening messages of a new conversation, actively reference the journal entries provided. This is what makes Witness unique.
+- As the conversation continues, prioritize the chat history above all. Do not restart from scratch on every turn.
+- Never preface a reply with "According to your journal entries" unless the user explicitly asked you to search entries.
+- For direct questions, answer directly. Cite entries as supporting evidence, not as the entire answer.
+- You are a sharp, honest analyst — not a wellness chatbot.
+
+Tone: Like a sharp, trusted friend who has read everything you have written. Not a therapist, not a chatbot.
 No em dashes. No hollow affirmations. No "Great question!"
 
-{entry_block}"""
+{context_block}"""
 
-NO_ENTRIES_RESPONSE = """No journal entries are stored yet, so there is nothing to search through.
-
-Start recording daily entries and this chat will be able to reference your actual history."""
-
-
-# ─── HELPERS ─────────────────────────────────────────────────────────────────
-
-def _build_entry_block(entries: list[dict]) -> str:
-    """Format a list of entry dicts into a readable context block for the prompt."""
-    if not entries:
-        return "No relevant entries found."
-
-    lines = ["RELEVANT JOURNAL ENTRIES (ordered by relevance):\n"]
-    for i, e in enumerate(entries, 1):
-        date_str = e.get("date") or e.get("entry_date") or "unknown date"
-        transcript = (e.get("transcript") or "").strip()
-        if not transcript:
-            continue
-
-        # Truncate very long entries so we don't blow the context window
-        if len(transcript) > 600:
-            transcript = transcript[:600] + "... [truncated]"
-
-        # Include available metrics if present
-        metrics_parts = []
-        for key, label in [("stress", "stress"), ("mood", "mood"), ("energy", "energy"), ("anxiety", "anxiety")]:
-            val = e.get(key)
-            if val is not None:
-                metrics_parts.append(f"{label}={val}/10")
-        metrics_str = f"  [{', '.join(metrics_parts)}]" if metrics_parts else ""
-
-        lines.append(f"[{i}] {date_str}{metrics_str}")
-        lines.append(transcript)
-        lines.append("")
-
-    return "\n".join(lines)
+NO_ENTRIES_RESPONSE = (
+    "No journal entries are stored yet, so there is nothing to reference.\n\n"
+    "Record some daily entries and this chat will be able to reference your actual history."
+)
 
 
-def _get_relevant_entries(query: str, n: int = 8) -> list[dict]:
-    """
-    Fetch the most relevant journal entries for this question.
-    Uses ChromaDB semantic search if available, falls back to recent entries.
-    """
-    # Try semantic search first
-    try:
-        from chroma_manager import semantic_search
-        matches = semantic_search(query, n_results=n)
+class ThreadCreate(BaseModel):
+    title: Optional[str] = None
 
-        if matches:
-            conn = get_conn()
-            try:
-                results = []
-                for match in matches:
-                    entry_id = match.get("entry_id")
-                    if not entry_id:
-                        continue
-                    row = conn.execute("""
-                        SELECT e.id, e.date, e.transcript, m.stress, m.mood, m.energy, m.anxiety
-                        FROM   entries e
-                        LEFT JOIN metrics m ON m.entry_id = e.id
-                        WHERE  e.id = ?
-                    """, (entry_id,)).fetchone()
-                    if row:
-                        results.append(dict(row))
-                return results
-            finally:
-                conn.close()
-    except Exception as e:
-        log.warning(f"Semantic search unavailable: {e}")
+class ThreadRename(BaseModel):
+    title: str
 
-    # Fallback: return the most recent N daily entries
-    conn = get_conn()
-    try:
-        rows = conn.execute("""
-            SELECT e.id, e.date, e.transcript, m.stress, m.mood, m.energy, m.anxiety
-            FROM   entries e
-            LEFT JOIN metrics m ON m.entry_id = e.id
-            WHERE  e.type = 'daily' AND e.transcript != ''
-            ORDER  BY e.created_at DESC
-            LIMIT  ?
-        """, (n,)).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
+class SendMessage(BaseModel):
+    message: str
 
 
 def _has_any_entries() -> bool:
-    """Return True if the database has at least one entry with a transcript."""
     conn = get_conn()
     try:
         row = conn.execute(
@@ -162,94 +109,362 @@ def _has_any_entries() -> bool:
         conn.close()
 
 
-# ─── ROUTES ──────────────────────────────────────────────────────────────────
+def _get_last_entries(n: int = 5) -> list:
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT e.date, e.transcript, m.stress, m.mood
+            FROM   entries e
+            LEFT JOIN metrics m ON m.entry_id = e.id
+            WHERE  e.transcript IS NOT NULL AND LENGTH(TRIM(e.transcript)) > 20
+            ORDER  BY e.date DESC, e.id DESC
+            LIMIT  ?
+        """, (n,)).fetchall()
+        return [dict(r) for r in reversed(rows)]
+    finally:
+        conn.close()
 
-class ChatMessage(BaseModel):
-    message: str
-    stream:  bool = True   # frontend always uses streaming
+
+def _format_entry_context(entries: list) -> str:
+    if not entries:
+        return ""
+    lines = ["RECENT JOURNAL ENTRIES (your context for this conversation):\n"]
+    for e in entries:
+        date_str = e.get("date") or "unknown"
+        text     = (e.get("transcript") or "").strip()[:500]
+        metrics  = []
+        if e.get("stress") is not None: metrics.append(f"stress={e['stress']}/10")
+        if e.get("mood")   is not None: metrics.append(f"mood={e['mood']}/10")
+        metric_str = f"  [{', '.join(metrics)}]" if metrics else ""
+        lines.append(f"[{date_str}{metric_str}]\n{text}\n")
+    return "\n".join(lines)
 
 
-@router.post("/message")
-async def chat_message(body: ChatMessage):
+def _format_conversation_history(messages: list) -> str:
+    if not messages:
+        return ""
+    parts = []
+    for m in messages:
+        role    = "USER" if m["role"] == "user" else "WITNESS"
+        content = (m["content"] or "").strip()
+        parts.append(f"{role}: {content}")
+    return "\n\n".join(parts)
+
+
+def _is_recall_query(text: str) -> bool:
+    lower = text.lower()
+    return any(kw in lower for kw in RECALL_KEYWORDS)
+
+
+def _get_recall_block(query: str) -> str:
+    try:
+        from chroma_manager import semantic_search
+        matches = semantic_search(query, n_results=3)
+        if not matches:
+            return ""
+        conn = get_conn()
+        try:
+            lines = ["RELEVANT PAST ENTRIES (semantic search results):\n"]
+            for match in matches:
+                entry_id = match.get("entry_id")
+                if not entry_id:
+                    continue
+                row = conn.execute(
+                    "SELECT date, transcript FROM entries WHERE id = ?", (entry_id,)
+                ).fetchone()
+                if not row:
+                    continue
+                text = (row["transcript"] or "").strip()[:400]
+                lines.append(f"[{row['date']}]\n{text}\n")
+            return "\n".join(lines) if len(lines) > 1 else ""
+        finally:
+            conn.close()
+    except Exception as e:
+        log.debug(f"Recall search failed (non-fatal): {e}")
+        return ""
+
+
+def _extract_chat_facts_background(user_msg: str, ai_response: str):
+    try:
+        from routes.memory import start_memory_update
+        combined = f"User: {user_msg}\n\nAssistant observed: {ai_response}"
+        start_memory_update(combined, entry_type="chat")
+    except Exception as e:
+        log.debug(f"Chat memory update failed (non-fatal): {e}")
+
+
+def _save_user_message(thread_id: int, user_content: str) -> int:
     """
-    Main chat endpoint. Accepts a question and streams the AI response.
-
-    Uses Server-Sent Events (SSE) format so the frontend can display
-    tokens as they arrive — text appears word by word like a typewriter.
-
-    SSE format:
-      data: {"type": "token", "text": "word "}
-      data: {"type": "done"}
-      data: {"type": "error", "text": "..."}
+    Insert the user message and a blank assistant placeholder before streaming starts.
+    Returns the assistant row id so we can update it after streaming completes.
+    Saving upfront means a client disconnect never loses the user message.
     """
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO chat_messages (thread_id, role, content) VALUES (?, 'user', ?)",
+            (thread_id, user_content)
+        )
+        cur = conn.execute(
+            "INSERT INTO chat_messages (thread_id, role, content) VALUES (?, 'assistant', '')",
+            (thread_id,)
+        )
+        assistant_id = cur.lastrowid
+        conn.execute(
+            "UPDATE chat_threads SET updated_at = datetime('now') WHERE id = ?",
+            (thread_id,)
+        )
+        conn.commit()
+        return assistant_id
+    finally:
+        conn.close()
+
+
+def _update_assistant_message(assistant_id: int, thread_id: int, content: str):
+    """Fill in the assistant placeholder row once streaming completes."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE chat_messages SET content = ? WHERE id = ?",
+            (content, assistant_id)
+        )
+        conn.execute(
+            "UPDATE chat_threads SET updated_at = datetime('now') WHERE id = ?",
+            (thread_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── THREAD CRUD ──────────────────────────────────────────────────────────────
+
+@router.get("/threads")
+def list_threads():
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT t.id, t.title, t.created_at, t.updated_at,
+                   COUNT(m.id) as message_count
+            FROM   chat_threads t
+            LEFT JOIN chat_messages m ON m.thread_id = t.id
+            GROUP BY t.id
+            ORDER  BY t.updated_at DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.post("/threads")
+def create_thread(body: ThreadCreate = ThreadCreate()):
+    entries = _get_last_entries(5)
+    entry_context_json = json.dumps(entries)
+    title = (body.title or "New Thread").strip()[:80]
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO chat_threads (title, entry_context) VALUES (?, ?)",
+            (title, entry_context_json)
+        )
+        conn.commit()
+        thread_id = cur.lastrowid
+        row = conn.execute("SELECT * FROM chat_threads WHERE id = ?", (thread_id,)).fetchone()
+        return {**dict(row), "message_count": 0}
+    finally:
+        conn.close()
+
+
+@router.patch("/threads/{thread_id}")
+def rename_thread(thread_id: int, body: ThreadRename):
+    title = body.title.strip()[:80]
+    if not title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    conn = get_conn()
+    try:
+        if not conn.execute("SELECT id FROM chat_threads WHERE id = ?", (thread_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Thread not found")
+        conn.execute(
+            "UPDATE chat_threads SET title = ?, updated_at = datetime('now') WHERE id = ?",
+            (title, thread_id)
+        )
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM chat_threads WHERE id = ?", (thread_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+@router.delete("/threads/{thread_id}")
+def delete_thread(thread_id: int):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM chat_threads WHERE id = ?", (thread_id,))
+        conn.commit()
+        return {"status": "deleted", "id": thread_id}
+    finally:
+        conn.close()
+
+
+# ─── MESSAGES ────────────────────────────────────────────────────────────────
+
+@router.get("/threads/{thread_id}/messages")
+def get_messages(thread_id: int):
+    conn = get_conn()
+    try:
+        if not conn.execute("SELECT id FROM chat_threads WHERE id = ?", (thread_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Thread not found")
+        rows = conn.execute("""
+            SELECT id, role, content, created_at
+            FROM   chat_messages
+            WHERE  thread_id = ?
+              AND  NOT (role = 'assistant' AND (content IS NULL OR content = ''))
+            ORDER  BY id ASC
+        """, (thread_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.delete("/threads/{thread_id}/messages")
+def clear_messages(thread_id: int):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM chat_messages WHERE thread_id = ?", (thread_id,))
+        conn.commit()
+        return {"status": "cleared", "thread_id": thread_id}
+    finally:
+        conn.close()
+
+
+# ─── STREAMING MESSAGE ────────────────────────────────────────────────────────
+
+@router.post("/threads/{thread_id}/message")
+async def send_message(thread_id: int, body: SendMessage):
     question = body.message.strip()
     if not question:
-        return {"error": "Empty message"}
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    # Save the user message to in-memory history
-    _chat_history.append({"role": "user", "text": question})
-    if len(_chat_history) > MAX_HISTORY:
-        _chat_history.pop(0)
+    conn = get_conn()
+    try:
+        thread = conn.execute(
+            "SELECT * FROM chat_threads WHERE id = ?", (thread_id,)
+        ).fetchone()
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
 
-    # Check if there's anything to search through
-    if not _has_any_entries():
+        try:
+            injected_entries = json.loads(thread["entry_context"] or "[]")
+        except Exception:
+            injected_entries = []
+
+        history_rows = conn.execute("""
+            SELECT role, content FROM chat_messages
+            WHERE  thread_id = ?
+              AND  NOT (role = 'assistant' AND (content IS NULL OR content = ''))
+            ORDER  BY id DESC
+            LIMIT  ?
+        """, (thread_id, MAX_HISTORY_MESSAGES)).fetchall()
+        history = list(reversed([dict(r) for r in history_rows]))
+        is_first_message = len(history) == 0
+    finally:
+        conn.close()
+
+    # No-entries fast path — use same save pattern to avoid orphaned rows
+    if not _has_any_entries() and not injected_entries:
+        assistant_msg_id = _save_user_message(thread_id, question)
+
         async def no_entries_stream():
             yield f"data: {json.dumps({'type': 'token', 'text': NO_ENTRIES_RESPONSE})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
-            _chat_history.append({"role": "assistant", "text": NO_ENTRIES_RESPONSE})
+            _update_assistant_message(assistant_msg_id, thread_id, NO_ENTRIES_RESPONSE)
+
         return StreamingResponse(no_entries_stream(), media_type="text/event-stream")
 
-    # Get relevant entries
-    entries = _get_relevant_entries(question, n=8)
-    entry_block = _build_entry_block(entries)
+    # Build context block
+    context_parts = []
+    entry_block = _format_entry_context(injected_entries)
+    if entry_block:
+        context_parts.append(entry_block)
 
-    # Build the final prompt
-    system = CHAT_SYSTEM_PROMPT.format(entry_block=entry_block)
-    full_prompt = f"{system}\n\nUser question: {question}"
+    try:
+        from routes.memory import _get_memory_document
+        doc = _get_memory_document()
+        if doc and doc.strip():
+            context_parts.append(f"ABOUT THIS PERSON (from memory):\n{doc.strip()}")
+    except Exception:
+        pass
+
+    context_block = "\n\n".join(context_parts)
+    system = CHAT_SYSTEM_PROMPT.format(context_block=context_block)
+
+    # Recall query: live ChromaDB lookup
+    recall_block = ""
+    if _is_recall_query(question):
+        recall_block = _get_recall_block(question)
+
+    history_text = _format_conversation_history(history)
+    user_turn    = f"{question}\n\n{recall_block}" if recall_block else question
+
+    if history_text:
+        prompt = f"{history_text}\n\nUSER: {user_turn}\nWITNESS:"
+    else:
+        prompt = f"USER: {user_turn}\nWITNESS:"
+
+    # Auto-title thread from first message — strip to last word boundary
+    if is_first_message:
+        raw_title = question[:60].strip()
+        if len(question) > 60:
+            # Don't cut mid-word
+            last_space = raw_title.rfind(" ")
+            if last_space > 20:
+                raw_title = raw_title[:last_space]
+        if raw_title:
+            conn = get_conn()
+            try:
+                conn.execute(
+                    "UPDATE chat_threads SET title = ?, updated_at = datetime('now') "
+                    "WHERE id = ? AND title = 'New Thread'",
+                    (raw_title, thread_id)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    # Save user message + blank assistant placeholder before streaming begins.
+    # This ensures the user message is persisted even if the client disconnects.
+    assistant_msg_id = _save_user_message(thread_id, question)
 
     async def stream_response():
-        """Generator that yields SSE-formatted tokens from Ollama."""
         full_text = []
         try:
-            async for token in generate_stream(prompt=full_prompt):
-                # Strip DeepSeek <think> blocks if they bleed into the stream
-                # (they usually don't, but occasionally the model is chatty)
+            # generate_stream already strips <think> blocks via its internal
+            # state machine — no need to filter tokens here.
+            async for token in generate_stream(
+                prompt=prompt,
+                system=system,
+                temperature=0.75,
+                num_ctx=8192,
+            ):
                 full_text.append(token)
                 yield f"data: {json.dumps({'type': 'token', 'text': token})}\n\n"
 
-            # Save complete assistant response to history
-            complete = "".join(full_text)
-            _chat_history.append({"role": "assistant", "text": complete})
-            if len(_chat_history) > MAX_HISTORY:
-                _chat_history.pop(0)
+            complete = "".join(full_text).strip()
+            _update_assistant_message(assistant_msg_id, thread_id, complete)
+
+            threading.Thread(
+                target=_extract_chat_facts_background,
+                args=(question, complete),
+                daemon=True
+            ).start()
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
         except Exception as e:
-            log.error(f"Chat stream error: {e}")
+            log.error(f"Chat stream error (thread {thread_id}): {e}")
             yield f"data: {json.dumps({'type': 'error', 'text': str(e)})}\n\n"
 
     return StreamingResponse(
         stream_response(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",   # disables nginx buffering if running behind a proxy
-        }
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     )
-
-
-@router.get("/history")
-def get_chat_history():
-    """
-    Return in-memory chat history for the current session.
-    This resets when the backend restarts — intentional for privacy.
-    """
-    return {"messages": _chat_history}
-
-
-@router.delete("/history")
-def clear_chat_history():
-    """Clear the in-memory chat history."""
-    _chat_history.clear()
-    return {"status": "cleared"}

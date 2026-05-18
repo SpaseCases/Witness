@@ -1,3 +1,8 @@
+# Bug fix: generate_questions temperature 0.8->0.7 per task table; run_flag_analysis
+#          temperature 0.3->0.2 per task table; fmt="json" added to all generate()
+#          calls; run_flag_analysis num_ctx raised to 16384 (aggregates 30 days of
+#          entries); clean_llm_json removed — now imported from ollama_manager (single
+#          source of truth); redundant local `import re as _re` removed.
 """
 WITNESS — Insights & Flags API
 AI analyzes journal history and surfaces honest behavioral patterns.
@@ -18,29 +23,11 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
-from database import get_conn, get_setting
-from ollama_manager import generate
+from database import get_conn
+from ollama_manager import generate, clean_llm_json
 
 log = logging.getLogger("witness.insights")
 router = APIRouter()
-
-# ─── JSON CLEANING HELPER ─────────────────────────────────────────────────────
-
-def clean_llm_json(raw: str) -> str:
-    """
-    Strip DeepSeek <think> blocks and markdown code fences from a raw
-    LLM response, leaving only the JSON content ready for json.loads().
-    """
-    # 1. Remove <think>...</think> blocks (DeepSeek R1 chain-of-thought)
-    text = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL)
-
-    # 2. Extract content from markdown code fences if present
-    fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
-    if fence_match:
-        text = fence_match.group(1)
-
-    return text.strip()
-
 
 # ─── PROMPTS ──────────────────────────────────────────────────────────────────
 
@@ -48,22 +35,75 @@ def clean_llm_json(raw: str) -> str:
 # must be doubled — {{ and }} — so Python's .format() treats them as literal characters.
 # Failure to do this causes a KeyError -> 500 when the prompt is rendered.
 
-METRIC_EXTRACTION_PROMPT = """You are analyzing a personal journal entry to extract quantified metrics.
+METRIC_EXTRACTION_PROMPT = """You are extracting psychological metrics from a personal journal entry. Be accurate and evidence-based. Only score what the person actually describes — do not infer what they did not mention.
 
-The user's journal entry transcript is below. Extract the following scores on a 1-10 scale based on what is described. If a metric cannot be determined from the text, return null.
+Use these anchored scales. Scores must reflect the text evidence, not your assumptions.
 
-Metrics to extract:
-- stress: How stressed does the person seem? (1=totally calm, 10=overwhelmed)
-- mood: Overall mood quality (1=very bad, 10=excellent)
-- anxiety: Anxiety or worry level (1=none, 10=severe)
-- energy: Physical/mental energy (1=exhausted, 10=highly energized)
-- mental_clarity: Focus and cognitive sharpness (1=foggy, 10=crystal clear)
-- productivity: How productive was their day (1=nothing done, 10=highly productive)
-- social_sat: Satisfaction with social interactions today (1=very isolated/negative, 10=very connected/positive)
-- sentiment: Overall emotional tone (-1.0=very negative, 0=neutral, 1.0=very positive)
+STRESS (1-10): How burdened or pressured does the person feel?
+  1-2 = calm, relaxed, no pressure mentioned
+  3-4 = mild pressure, manageable demands
+  5-6 = noticeable stress, struggling at times but coping
+  7-8 = high stress, frequently overwhelmed, difficulty managing
+  9-10 = extreme stress, crisis-level, unable to cope
 
-Return ONLY a valid JSON object. No explanation. No extra text. Example:
-{{"stress": 7, "mood": 4, "anxiety": 6, "energy": 3, "mental_clarity": 4, "productivity": 5, "social_sat": 3, "sentiment": -0.3}}
+MOOD (1-10): Overall emotional quality of their day
+  1-2 = very low, depressed, empty, or severely distressed
+  3-4 = below average, sad, irritable, or discouraged
+  5-6 = neutral to slightly positive, mixed day, getting by
+  7-8 = good mood, upbeat, satisfied, things going well
+  9-10 = excellent, very happy, energized emotionally
+
+ANXIETY (1-10): Worry, fear, nervousness, or dread expressed
+  1-2 = no anxiety mentioned, calm
+  3-4 = mild worry, some nervousness about specific things
+  5-6 = moderate anxiety, intrusive thoughts, difficulty relaxing
+  7-8 = high anxiety, persistent worry, physical symptoms mentioned
+  9-10 = severe anxiety, panic-level, overwhelming fear
+  Return null if anxiety is not mentioned at all.
+
+ENERGY (1-10): Physical and mental energy levels
+  1-2 = exhausted, fatigued, can barely function
+  3-4 = low energy, sluggish, tired
+  5-6 = average energy, functional
+  7-8 = good energy, productive and active
+  9-10 = very high energy, feel great physically
+
+MENTAL_CLARITY (1-10): Focus, concentration, and cognitive sharpness
+  1-2 = very foggy, can't concentrate, dissociated
+  3-4 = scattered, distracted, hard to focus
+  5-6 = average clarity, some focus issues
+  7-8 = clear-headed, focused, thinking well
+  9-10 = sharp, highly focused, in flow state
+  Return null if not mentioned.
+
+PRODUCTIVITY (1-10): How much was accomplished vs intended
+  1-2 = nothing done, completely unproductive
+  3-4 = very little done, mostly avoided tasks
+  5-6 = some things done, partially productive
+  7-8 = productive day, most tasks completed
+  9-10 = highly productive, exceeded goals
+  Return null if not mentioned.
+
+SOCIAL_SAT (1-10): Satisfaction with social interactions
+  1-2 = very isolated, negative social experiences
+  3-4 = lonely or social friction
+  5-6 = neutral, ordinary social contact
+  7-8 = good social connections, felt supported
+  9-10 = very connected, strong positive interactions
+  Return null if social interactions are not mentioned.
+
+SENTIMENT (-1.0 to 1.0): Overall emotional tone of the entry
+  -1.0 = entirely negative
+  -0.5 = mostly negative
+   0.0 = neutral or mixed
+  +0.5 = mostly positive
+  +1.0 = entirely positive
+
+IMPORTANT: If a metric cannot be determined from what was actually said, return null. Do not guess.
+Return ONLY a valid JSON object. No explanation. No preamble. No markdown fences.
+
+Example output:
+{{"stress": 7, "mood": 4, "anxiety": 6, "energy": 3, "mental_clarity": null, "productivity": 5, "social_sat": null, "sentiment": -0.4}}
 
 Journal entry:
 {transcript}"""
@@ -93,16 +133,37 @@ Return ONLY a JSON array of exactly 3 strings. Example:
 
 FLAG_ANALYSIS_PROMPT = """You are analyzing someone's personal journal history to identify behavioral patterns worth flagging.
 
-You have access to the last {days} days of journal entries and metrics. Your job is to surface honest observations — not comfortable ones.
+You have access to the last {days} days of journal entries and extracted metrics. Your job is to surface honest, evidence-based observations about recurring patterns. Do not flag single incidents.
 
-Rules:
-- Only flag things with clear evidence across multiple entries
-- Each flag must cite specific entry dates as evidence
-- Be direct. Don't soften observations.
-- Categories: sleep, stress, social, productivity, mood, anxiety, avoidance, substance, physical, relationship
-- Severity: low (worth watching), medium (recurring pattern), high (consistent problem)
-- Don't flag one-off events — look for patterns
-- Don't prescribe. Observe and cite.
+SEVERITY THRESHOLDS — apply these strictly:
+  low    = pattern appears in 2-3 entries. Worth watching but not alarming.
+  medium = pattern appears in 4-6 entries OR metric average is consistently in concerning range (stress ≥6, mood ≤4, anxiety ≥6 across multiple entries)
+  high   = pattern appears in 7+ entries OR extreme values persist (stress ≥8, mood ≤3, or crisis language used multiple times)
+
+CATEGORY DEFINITIONS — use these precise definitions:
+  sleep        = mentions of poor sleep, insomnia, oversleeping, fatigue from sleep issues, erratic schedule
+  stress       = overwhelm, pressure, too much to do, can't keep up — backed by stress metric ≥6 across entries
+  social       = isolation, loneliness, conflict with others, avoided people, no social contact mentioned
+  productivity = consistent failure to accomplish stated goals, procrastination patterns, avoidance of specific tasks
+  mood         = persistent low mood, depressive language (hopeless, empty, pointless), mood metric ≤4 across entries
+  anxiety      = worry, dread, rumination, panic mentions, anxiety metric ≥6 across entries
+  avoidance    = ONLY flag if the person explicitly describes avoiding something they said they wanted to do, or repeatedly not following through on the same commitment
+  substance    = alcohol, drugs, or excessive caffeine mentioned as coping behavior (not casual mentions)
+  physical     = illness, pain, skipping exercise, physical health concerns mentioned repeatedly
+  relationship = recurring conflict, tension, or distance with a specific person or group
+  screen_time  = excessive phone/screen use mentioned repeatedly, or screen_time_mins data shows ≥4hrs on multiple days
+
+EVIDENCE RULES:
+  - Each flag MUST cite at least 2 different entry dates as evidence
+  - Do not flag something that only appeared in 1 entry, no matter how dramatic
+  - The description must reference specific things the person said, not vague generalizations
+  - If metrics show a trend but entries don't mention it, note the metric data but flag at low severity only
+
+DO NOT FLAG:
+  - One-time events or one-off bad days
+  - Things the person described as resolved
+  - Absence of positive things (not mentioning exercise is not a fitness flag)
+  - Speculation about causes — only observe what is stated
 
 Entries summary:
 {entries_summary}
@@ -110,18 +171,19 @@ Entries summary:
 Metrics trends:
 {metrics_summary}
 
-Return a JSON array of flag objects:
+Return a JSON array of flag objects. Return an empty array [] if no genuine patterns exist — it is better to return no flags than to flag noise.
+
 [
   {{
     "severity": "medium",
     "category": "sleep",
-    "title": "Short flag title",
-    "description": "2-3 sentence honest description of what you observed.",
+    "title": "Short descriptive flag title (under 8 words)",
+    "description": "2-3 sentences citing specific evidence. Quote or closely paraphrase what the person said. State the pattern directly.",
     "evidence": ["2026-04-01", "2026-04-03", "2026-04-07"]
   }}
 ]
 
-Return only the JSON array. No explanation."""
+Return only the JSON array. No explanation. No preamble."""
 
 # ─── METRIC EXTRACTION ────────────────────────────────────────────────────────
 
@@ -145,7 +207,7 @@ async def extract_metrics(entry_id: int):
             raise HTTPException(status_code=400, detail="Entry has no transcript")
 
         prompt   = METRIC_EXTRACTION_PROMPT.format(transcript=entry["transcript"])
-        response = await generate(prompt, temperature=0.1, max_tokens=200)
+        response = await generate(prompt, temperature=0.1, max_tokens=300, fmt="json", num_ctx=8192)
 
         try:
             clean   = clean_llm_json(response)
@@ -211,7 +273,7 @@ async def generate_questions(entry_id: int):
             transcript=entry["transcript"],
             context=context
         )
-        response = await generate(prompt, temperature=0.8, max_tokens=400)
+        response = await generate(prompt, temperature=0.7, max_tokens=400, fmt="json")
 
         try:
             clean     = clean_llm_json(response)
@@ -245,9 +307,11 @@ async def run_flag_analysis(days: int = 30):
     try:
         entries = conn.execute("""
             SELECT e.date, e.transcript, m.stress, m.mood, m.anxiety,
-                   m.energy, m.productivity, m.social_sat, m.sentiment
+                   m.energy, m.productivity, m.social_sat, m.sentiment,
+                   h.screen_time_mins
             FROM   entries e
             LEFT JOIN metrics m ON m.entry_id = e.id
+            LEFT JOIN health_data h ON h.date = e.date
             WHERE  e.type = 'daily'
             AND    e.date >= date('now', ?)
             ORDER  BY e.date ASC
@@ -265,9 +329,11 @@ async def run_flag_analysis(days: int = 30):
 
         metrics_rows = []
         for r in entries:
+            screen = f"{r['screen_time_mins']/60:.1f}h" if r["screen_time_mins"] is not None else "null"
             row = (f"{r['date']}: stress={r['stress']}, mood={r['mood']}, "
                    f"anxiety={r['anxiety']}, energy={r['energy']}, "
-                   f"productivity={r['productivity']}, social={r['social_sat']}")
+                   f"productivity={r['productivity']}, social={r['social_sat']}, "
+                   f"screen_time={screen}")
             metrics_rows.append(row)
         metrics_summary = "\n".join(metrics_rows)
 
@@ -276,7 +342,7 @@ async def run_flag_analysis(days: int = 30):
             entries_summary=entries_summary,
             metrics_summary=metrics_summary
         )
-        response = await generate(prompt, temperature=0.3, max_tokens=2000)
+        response = await generate(prompt, temperature=0.2, max_tokens=2000, num_ctx=16384, fmt="json")
 
         try:
             clean = clean_llm_json(response)
@@ -394,7 +460,7 @@ def get_trends(days: int = 30):
         rows = conn.execute("""
             SELECT m.date, m.stress, m.mood, m.anxiety, m.energy,
                    m.mental_clarity, m.productivity, m.social_sat, m.sentiment,
-                   h.hrv, h.resting_hr, h.sleep_total_mins
+                   h.hrv, h.resting_hr, h.sleep_total_mins, h.screen_time_mins
             FROM   metrics m
             LEFT JOIN health_data h ON h.date = m.date
             WHERE  m.date >= date('now', ?)

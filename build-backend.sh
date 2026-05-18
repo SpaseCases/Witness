@@ -30,7 +30,7 @@ cd python-backend
 echo "[1/3] Installing PyInstaller..."
 python3 -m pip install pyinstaller --quiet
 if [ $? -ne 0 ]; then
-    echo "ERROR: pip install failed. Make sure Python 3.11+ is installed."
+    echo "ERROR: pip install failed. Make sure Python 3.10+ is installed."
     exit 1
 fi
 

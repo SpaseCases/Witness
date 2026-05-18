@@ -2,6 +2,17 @@
  * WITNESS -- Log Browser
  * ARCHIVE screen: searchable, filterable list of all entries + rants.
  *
+ * Bug fixes (batch 8):
+ *   - EntryDetail handleDelete used window.confirm() which Electron blocks by
+ *     default (returns true silently, always deleting without prompting). Replaced
+ *     with an inline confirmation UI matching the bulk-delete pattern.
+ *   - EntryDetail handleDelete had no try/catch — network errors threw unhandled
+ *     rejections and left the UI in a broken state. Now shows an error message.
+ *   - fmtDate: date-only strings parsed as UTC midnight caused off-by-one-day
+ *     rendering in UTC-negative timezones. Fixed with T12:00:00 noon anchor.
+ *   - fetchEntries useCallback dep array included search/filter/searchMode redundantly
+ *     (they are passed as explicit args). Removed to stop unnecessary re-creation.
+ *
  * Bug 2 fix:
  *   - EntryDetail always calls GET /entries/{id} regardless of type.
  *     No more special rant branch that skipped the API call.
@@ -29,7 +40,10 @@ const API = 'http://127.0.0.1:8000'
 
 function fmtDate(iso) {
   if (!iso) return '—'
-  const d = new Date(iso)
+  // If this looks like a date-only string (YYYY-MM-DD), anchor to noon local time
+  // to avoid UTC-midnight parsing shifting the date back one day in UTC- timezones.
+  const str = iso.length === 10 ? iso + 'T12:00:00' : iso
+  const d = new Date(str)
   return d.toLocaleDateString('en-US', {
     weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
   }).toUpperCase()
@@ -54,12 +68,43 @@ function MetricPill({ label, value }) {
   )
 }
 
+// Generates up to 2 flag pills from raw metric values.
+// Priority: severity high > medium, stress > mood > anxiety > energy.
+function MetricFlags({ entry, max = 2 }) {
+  const flags = []
+
+  if (entry.stress != null) {
+    if (entry.stress >= 7.5)      flags.push({ label: 'HIGH STRESS',     color: '#e05050', pri: 0 })
+    else if (entry.stress >= 5.5) flags.push({ label: 'ELEVATED STRESS', color: '#c38c32', pri: 2 })
+  }
+  if (entry.mood != null && entry.mood <= 3.5)       flags.push({ label: 'LOW MOOD',     color: '#e05050', pri: 1 })
+  if (entry.anxiety != null && entry.anxiety >= 7)   flags.push({ label: 'HIGH ANXIETY', color: '#e05050', pri: 1 })
+  if (entry.energy != null && entry.energy <= 3.5)   flags.push({ label: 'LOW ENERGY',   color: '#c38c32', pri: 3 })
+
+  // Sort: lower pri number = higher priority
+  flags.sort((a, b) => a.pri - b.pri)
+  const shown = flags.slice(0, max)
+
+  if (shown.length === 0) return null
+  return (
+    <div className="lb-flag-pills">
+      {shown.map((f, i) => (
+        <span key={i} className="lb-flag-pill" style={{ color: f.color, borderColor: f.color }}>
+          {f.label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 // ─── EXPANDED ENTRY DETAIL ────────────────────────────────────────────────────
 
 function EntryDetail({ entry, onClose, onStar, onDelete }) {
-  const [detail, setDetail]     = useState(null)
-  const [loading, setLoading]   = useState(true)
-  const [deleting, setDeleting] = useState(false)
+  const [detail, setDetail]             = useState(null)
+  const [loading, setLoading]           = useState(true)
+  const [deleting, setDeleting]         = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleteError, setDeleteError]   = useState('')
 
   useEffect(() => {
     setLoading(true)
@@ -70,10 +115,21 @@ function EntryDetail({ entry, onClose, onStar, onDelete }) {
   }, [entry.id])
 
   const handleDelete = async () => {
-    if (!confirm('Delete this entry permanently?')) return
+    // window.confirm() is blocked in Electron — use inline confirmation instead
+    if (!confirmingDelete) {
+      setConfirmingDelete(true)
+      return
+    }
     setDeleting(true)
-    await fetch(`${API}/entries/${entry.id}`, { method: 'DELETE' })
-    onDelete(entry.id)
+    setConfirmingDelete(false)
+    try {
+      const res = await fetch(`${API}/entries/${entry.id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error(`Server returned ${res.status}`)
+      onDelete(entry.id)
+    } catch (err) {
+      setDeleteError(`Delete failed: ${err.message}`)
+      setDeleting(false)
+    }
   }
 
   const handleStar = async () => {
@@ -125,9 +181,25 @@ function EntryDetail({ entry, onClose, onStar, onDelete }) {
             >
               {entry.starred ? '★' : '☆'}
             </button>
-            <button className="lb-delete-btn" onClick={handleDelete} disabled={deleting}>
-              {deleting ? '...' : '✕ DELETE'}
-            </button>
+            {!confirmingDelete ? (
+              <button className="lb-delete-btn" onClick={handleDelete} disabled={deleting}>
+                {deleting ? '...' : '✕ DELETE'}
+              </button>
+            ) : (
+              <>
+                <button className="lb-confirm-yes" onClick={handleDelete}>
+                  CONFIRM DELETE
+                </button>
+                <button className="lb-filter-btn" onClick={() => setConfirmingDelete(false)}>
+                  CANCEL
+                </button>
+              </>
+            )}
+            {deleteError && (
+              <span style={{ fontSize: '9px', color: '#e05050', letterSpacing: '1px' }}>
+                {deleteError}
+              </span>
+            )}
             <button className="lb-close-btn" onClick={onClose}>✕</button>
           </div>
         </div>
@@ -141,6 +213,7 @@ function EntryDetail({ entry, onClose, onStar, onDelete }) {
 
             {detail.metrics && (
               <div className="lb-detail-metrics">
+                <MetricFlags entry={detail.metrics} max={4} />
                 <MetricPill label="MOOD"    value={detail.metrics.mood} />
                 <MetricPill label="STRESS"  value={detail.metrics.stress} />
                 <MetricPill label="ENERGY"  value={detail.metrics.energy} />
@@ -296,6 +369,7 @@ function EntryRow({ entry, onClick, showDistance, selectMode, selected, onToggle
 
       {hasMetrics && !selectMode && (
         <div className="lb-row-metrics">
+          <MetricFlags entry={entry} max={2} />
           {entry.mood   != null && <MetricPill label="MOOD"   value={entry.mood} />}
           {entry.stress != null && <MetricPill label="STRESS" value={entry.stress} />}
         </div>
@@ -384,7 +458,7 @@ export default function LogBrowser({ onNavigate }) {
     } finally {
       setLoading(false)
     }
-  }, [search, filter, searchMode, fetchKeyword, fetchSemantic])
+  }, [fetchKeyword, fetchSemantic])
 
   // Single debounced effect covers both initial load and subsequent filter/search changes.
   // Removed the bare useEffect(() => { fetchEntries() }, []) that caused a double fetch

@@ -1,3 +1,5 @@
+# Bug fix: generate() call updated with num_ctx=16384 — profile aggregates
+#          up to 200 entries in the prompt so the default 8192 ctx is insufficient.
 """
 WITNESS -- Longitudinal Self-Model API
 
@@ -188,7 +190,7 @@ async def generate_profile():
         log.info(f"Profile: generating from {len(entries)} entries ({len(entry_text)} chars)...")
 
         prompt   = _PROFILE_PROMPT.format(entries=entry_text[:12000])
-        response = await generate(prompt, temperature=0.4, max_tokens=800)
+        response = await generate(prompt, temperature=0.4, max_tokens=800, num_ctx=16384)
 
         try:
             clean  = clean_llm_json(response)

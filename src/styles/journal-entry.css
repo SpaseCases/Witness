@@ -1,9 +1,4 @@
 
-/* ═══════════════════════════════════════════════════════════════════
-   STEP 9 ADDITIONS — Journal Entry Screen
-   Append this entire block to the bottom of globals.css
-   ═══════════════════════════════════════════════════════════════════ */
-
 /* ── JOURNAL ENTRY PAGE ──────────────────────────────────────────── */
 
 .journal-entry {
@@ -429,12 +424,6 @@
 .star-btn.starred {
   color: #f5a830;
 }
-/* ═══════════════════════════════════════════════════════════════════
-   STEP 16 ADDITIONS — Live Transcription + Dashboard Stats
-   Append this entire block to the BOTTOM of:
-   witness/src/styles/journal-entry.css
-   ═══════════════════════════════════════════════════════════════════ */
-
 /* ── LIVE TRANSCRIPTION INDICATOR ───────────────────────────────── */
 
 /* "LIVE" badge next to the TRANSCRIPT label */
@@ -481,10 +470,4 @@
   animation: breathe 1.2s ease-in-out infinite;
 }
 
-/* ── DASHBOARD STRESS COLOR CLASSES ─────────────────────────────── */
-/* These are applied to the Avg Stress card value based on score.    */
-/* Add these to globals.css OR here — both work.                     */
 
-.stress-high { color: #e05050 !important; }  /* 7.5-10: red   */
-.stress-mid  { color: #f5a830 !important; }  /* 5-7.4:  amber */
-.stress-low  { color: #50a870 !important; }  /* 0-4.9:  green */

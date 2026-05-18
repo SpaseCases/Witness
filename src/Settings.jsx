@@ -826,9 +826,6 @@ export default function Settings() {
   const [notifyTime,     setNotifyTime]     = useState('20:00')
   const [notifyEnabled,  setNotifyEnabled]  = useState(true)
   const [warmupOnStart,  setWarmupOnStart]  = useState(true)
-  const [userProfile,    setUserProfile]    = useState('')
-  const [generating,     setGenerating]     = useState(false)
-  const [genError,       setGenError]       = useState('')
   const [questionPool,   setQuestionPool]   = useState([])
 
   // catalog key — incrementing this forces ModelCatalog to reload
@@ -861,7 +858,6 @@ export default function Settings() {
           setNotifyTime(data.notify_time        || '20:00')
           setNotifyEnabled(data.notify_enabled  !== '0')
           setWarmupOnStart(data.warmup_on_start !== '0')
-          setUserProfile(data.user_profile      || '')
           try { setQuestionPool(JSON.parse(data.question_pool || '[]')) }
           catch { setQuestionPool([]) }
         }
@@ -872,13 +868,11 @@ export default function Settings() {
         if (hardwareRes.ok) {
           const hwData = await hardwareRes.json()
           setHardware(hwData)
-          if (settingsRes.ok) {
-            const sData = await settingsRes.json().catch(() => null)
-            if (!sData?.context_window) {
-              const model = sData?.model || 'gemma4:3b'
-              setContextWindow(getRecommendedCtx(model, hwData?.vram_gb ?? null))
-            }
-          }
+          // Use selectedModel already parsed above — can't consume settingsRes.json() twice
+          setContextWindow(prev => prev !== '16384'
+            ? prev
+            : getRecommendedCtx(selectedModel || 'gemma4:3b', hwData?.vram_gb ?? null)
+          )
         }
       } catch (e) {
         console.error('Settings load error:', e)
@@ -904,27 +898,6 @@ export default function Settings() {
     setCatalogKey(k => k + 1)
   }, [refreshModels])
 
-  // ─── Auto-generate context document ──────────────────────────────────────
-
-  const generateContext = async () => {
-    setGenerating(true)
-    setGenError('')
-    try {
-      const res = await fetch(`${API}/settings/generate-context`, { method: 'POST' })
-      const data = await res.json()
-      if (!res.ok) {
-        setGenError(data.detail || 'Generation failed.')
-        return
-      }
-      setUserProfile(data.profile || '')
-      setDirty(true)
-    } catch (err) {
-      setGenError(`Failed to reach backend: ${err.message}`)
-    } finally {
-      setGenerating(false)
-    }
-  }
-
   const saveAll = async () => {
     setSaving(true); setSaveMsg('')
     const updates = {
@@ -933,7 +906,6 @@ export default function Settings() {
       notify_time:     notifyTime,
       notify_enabled:  notifyEnabled  ? '1' : '0',
       warmup_on_start: warmupOnStart  ? '1' : '0',
-      user_profile:    userProfile,
       question_pool:   JSON.stringify(questionPool),
     }
     try {
@@ -1053,44 +1025,7 @@ export default function Settings() {
           </div>
         </Section>
 
-        {/* 5. PERSONAL PROFILE */}
-        <Section title="PERSONAL PROFILE" tag="AI CONTEXT DOCUMENT">
-          <div className="cfg-profile-wrap">
-            <div className="cfg-profile-header-row">
-              <div className="cfg-field-hint cfg-profile-hint">
-                Write anything the AI should know about you: job, relationships, health
-                history, goals, recurring stressors, context. The AI reads this before
-                generating insights and follow-up questions. Be specific — vague profiles
-                produce generic output.
-              </div>
-              <button
-                className={`cfg-autogen-btn ${generating ? 'cfg-autogen-loading' : ''}`}
-                onClick={generateContext}
-                disabled={generating}
-                title="Generate from your journal entries"
-              >
-                {generating ? (
-                  <><span className="cfg-autogen-spinner" /> GENERATING...</>
-                ) : (
-                  'AUTO-GENERATE'
-                )}
-              </button>
-            </div>
-            {genError && (
-              <div className="cfg-autogen-error">{genError}</div>
-            )}
-            <textarea
-              className="cfg-profile-textarea"
-              placeholder="Example: I'm a 34 year old software engineer working remotely. I have a history of anxiety and insomnia..."
-              value={userProfile}
-              onChange={e => { setUserProfile(e.target.value); setDirty(true) }}
-              spellCheck={true}
-            />
-            <div className="cfg-profile-count">{userProfile.length} CHARACTERS</div>
-          </div>
-        </Section>
-
-        {/* 6. QUESTION POOL */}
+        {/* 5. QUESTION POOL */}
         <Section title="QUESTION POOL" tag="FOLLOW-UP PROMPTS">
           <QuestionPool
             questions={questionPool}
@@ -1098,12 +1033,12 @@ export default function Settings() {
           />
         </Section>
 
-        {/* 7. APPLE HEALTH */}
+        {/* 6. APPLE HEALTH */}
         <Section title="APPLE HEALTH" tag="DATA IMPORT">
           <HealthImport />
         </Section>
 
-        {/* 8. DANGER ZONE */}
+        {/* 7. DANGER ZONE */}
         <DangerZone />
 
       </div>

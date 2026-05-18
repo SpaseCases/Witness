@@ -1,6 +1,14 @@
+# Bug fix: _sync_update_document_incremental() was a no-op after first run —
+#          now actually incorporates new transcript into existing document via
+#          an append+compress cycle; fmt="json" removed from fact extraction
+#          (Ollama JSON mode enforces object not array, breaking array parse);
+#          min_similarity default aligned between function and schema (0.35);
+#          _format_entries_for_prompt() guards against None transcript.
 """
 WITNESS — AI Memory System (Step 5)
-====================================
+# Updated: Fixed _sync_extract_facts regex — changed r'\[[^\]]*\]' to r'\[.*?\]'
+#           with re.DOTALL so multi-item arrays are captured correctly. Added
+#           second fallback pass on raw response, and detailed logging throughout.
 Two-layer persistent memory:
 
   Layer B — Living Memory Document
@@ -90,6 +98,25 @@ Original document:
 Compressed document (4-6 sentences, first person, no bullets):"""
 
 
+_UPDATE_PROMPT = """You are updating a personal context document for an AI journal assistant.
+
+Current document:
+{document}
+
+New journal entry to incorporate:
+{transcript}
+
+Rules:
+- Rewrite the document as a tight 4-6 sentence first-person paragraph
+- Incorporate any significant new information from the new entry
+- Remove outdated facts if the new entry contradicts them
+- Keep named people, places, ongoing goals, and recurring patterns
+- Do NOT invent things not in the document or the new entry
+- Return ONLY the updated paragraph, no preamble, no explanation
+
+Updated document:"""
+
+
 _RECALL_CONTEXT_TEMPLATE = """
 --- RELEVANT PAST ENTRIES (for context) ---
 {entries}
@@ -107,7 +134,7 @@ class RegenerateRequest(BaseModel):
 class RecallRequest(BaseModel):
     text:      str
     n_results: int = 5
-    min_similarity: float = 0.3   # distance threshold (0=identical, 1=unrelated)
+    min_similarity: float = 0.35  # aligned with recall_relevant_entries() default
 
 class FactDeleteRequest(BaseModel):
     pass
@@ -192,6 +219,8 @@ def _format_entries_for_prompt(rows: list[dict], max_chars_each: int = 600) -> s
         date_str = row.get('date') or 'unknown'
         kind     = 'ENTRY' if row.get('type') == 'daily' else (row.get('type') or 'entry').upper()
         text     = (row.get('transcript') or '').strip()
+        if not text:
+            continue
         if len(text) > max_chars_each:
             text = text[:max_chars_each] + '...'
         blocks.append(f"[{date_str} — {kind}]\n{text}")
@@ -216,7 +245,7 @@ async def _async_regenerate_document(max_entries: int = 80) -> str:
     entries_text = _format_entries_for_prompt(rows)
     prompt       = _REGENERATE_PROMPT.format(entries=entries_text)
 
-    raw  = await generate(prompt=prompt, temperature=0.35, max_tokens=500)
+    raw  = await generate(prompt=prompt, temperature=0.35, max_tokens=500, num_ctx=16384)
     text = _clean_ai_text(raw)
 
     if not text or len(text) < 20:
@@ -232,6 +261,10 @@ def _sync_extract_facts(transcript: str, entry_type: str = 'daily'):
     """
     Synchronous (for background thread): extract new atomic facts from a transcript
     and save them to the memory_facts table.
+
+    NOTE: fmt="json" is intentionally NOT used here — Ollama JSON mode enforces
+    a JSON object {}, but the prompt asks for an array []. Passing fmt="json"
+    causes the model to wrap the array in an object, breaking the regex parse.
     """
     try:
         from ollama_manager import generate
@@ -245,26 +278,60 @@ def _sync_extract_facts(transcript: str, entry_type: str = 'daily'):
             transcript=transcript[:2500]
         )
 
-        raw   = asyncio.run(generate(prompt=prompt, temperature=0.25, max_tokens=300))
+        loop = asyncio.new_event_loop()
+        try:
+            raw = loop.run_until_complete(generate(
+                prompt=prompt,
+                temperature=0.15,   # memory fact extraction — precise per task table
+                max_tokens=300,
+                # fmt="json" intentionally omitted — see docstring above
+            ))
+        finally:
+            loop.close()
         clean = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
 
-        match = re.search(r'\[[^\]]*\]', clean, re.DOTALL)
-        if not match:
-            # Try the raw text in case think block stripped it
-            match = re.search(r'\[[^\]]*\]', raw, re.DOTALL)
+        log.debug(f"Memory fact extraction raw response ({len(raw)} chars): {raw[:200]}")
 
-        if match:
+        # Pass 1: search cleaned text (think blocks stripped)
+        match = re.search(r'\[.*?\]', clean, re.DOTALL)
+
+        # Pass 2: fallback on raw response in case JSON was inside the think block
+        if not match:
+            log.debug("Memory: no array in cleaned text, trying raw response...")
+            match = re.search(r'\[.*?\]', raw, re.DOTALL)
+
+        if not match:
+            log.debug(f"Memory: no JSON array found in response. Cleaned snippet: {clean[:150]}")
+            return
+
+        try:
             facts = json.loads(match.group())
-            if isinstance(facts, list):
-                _save_facts([str(f).strip() for f in facts if f])
+        except json.JSONDecodeError as e:
+            log.warning(f"Memory: JSON parse error on fact array: {e}. Matched: {match.group()[:100]}")
+            return
+
+        if not isinstance(facts, list):
+            log.debug("Memory: parsed value is not a list, skipping.")
+            return
+
+        clean_facts = [str(f).strip() for f in facts if f and str(f).strip()]
+        log.info(f"Memory: extracted {len(clean_facts)} candidate facts from {entry_type} entry.")
+        _save_facts(clean_facts)
     except Exception as e:
         log.warning(f"Memory fact extraction failed (non-fatal): {e}")
 
 
 def _sync_update_document_incremental(transcript: str, entry_type: str = 'daily'):
     """
-    Synchronous (for background thread): if the memory document exists, update it
-    with facts from the new transcript. If it doesn't exist yet, build it fresh.
+    Synchronous (for background thread): update the memory document with the
+    content from a new transcript.
+
+    - If no document exists yet: build from last 30 entries.
+    - If document exists and is too long: compress first, then update.
+    - If document exists and is healthy: incorporate the new transcript directly.
+
+    Previously this function was a no-op after the first run — fixed by adding
+    the _UPDATE_PROMPT path that actually rewrites the document.
     """
     try:
         from ollama_manager import generate
@@ -272,12 +339,21 @@ def _sync_update_document_incremental(transcript: str, entry_type: str = 'daily'
         existing_doc = _get_memory_document()
 
         if not existing_doc or len(existing_doc.strip()) < 30:
-            # No document yet — build fresh (fire and forget, uses last 30 entries)
+            # No document yet — build fresh from last 30 entries
             rows = _fetch_entries_for_regeneration(30)
             if rows:
                 entries_text = _format_entries_for_prompt(rows)
                 prompt = _REGENERATE_PROMPT.format(entries=entries_text)
-                raw  = asyncio.run(generate(prompt=prompt, temperature=0.35, max_tokens=500))
+                loop = asyncio.new_event_loop()
+                try:
+                    raw = loop.run_until_complete(generate(
+                        prompt=prompt,
+                        temperature=0.35,
+                        max_tokens=500,
+                        num_ctx=16384,
+                    ))
+                finally:
+                    loop.close()
                 text = _clean_ai_text(raw)
                 if text and len(text) > 20:
                     set_setting('memory_document', text)
@@ -285,18 +361,48 @@ def _sync_update_document_incremental(transcript: str, entry_type: str = 'daily'
                     log.info(f"Memory: initial document created ({len(text)} chars).")
             return
 
-        # Document exists — check if it's getting too long and needs compression
+        # Document exists — compress if too long before updating
         if len(existing_doc) > 6000:
             compress_prompt = _COMPRESS_PROMPT.format(document=existing_doc[:6000])
-            raw_compressed  = asyncio.run(generate(prompt=compress_prompt, temperature=0.2, max_tokens=600))
-            compressed      = _clean_ai_text(raw_compressed)
+            loop = asyncio.new_event_loop()
+            try:
+                raw_compressed = loop.run_until_complete(generate(
+                    prompt=compress_prompt,
+                    temperature=0.2,
+                    max_tokens=600,
+                ))
+            finally:
+                loop.close()
+            compressed = _clean_ai_text(raw_compressed)
             if compressed and len(compressed) > 30:
                 existing_doc = compressed
-                set_setting('memory_document', existing_doc)
                 log.info(f"Memory: document compressed to {len(existing_doc)} chars.")
 
-        # The document is healthy — fact extraction runs separately
-        set_setting('memory_document_updated', datetime.utcnow().isoformat())
+        # Now incorporate the new transcript into the (possibly freshly compressed) document
+        update_prompt = _UPDATE_PROMPT.format(
+            document=existing_doc,
+            transcript=transcript[:2000]
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            raw_updated = loop.run_until_complete(generate(
+                prompt=update_prompt,
+                temperature=0.35,
+                max_tokens=500,
+                num_ctx=8192,
+            ))
+        finally:
+            loop.close()
+
+        updated = _clean_ai_text(raw_updated)
+        if updated and len(updated) > 20:
+            set_setting('memory_document', updated)
+            set_setting('memory_document_updated', datetime.utcnow().isoformat())
+            log.info(f"Memory: document updated ({len(updated)} chars).")
+        else:
+            # If update failed, at least record the timestamp
+            set_setting('memory_document_updated', datetime.utcnow().isoformat())
+            log.warning("Memory: document update returned empty result, keeping existing.")
 
     except Exception as e:
         log.warning(f"Memory document update failed (non-fatal): {e}")

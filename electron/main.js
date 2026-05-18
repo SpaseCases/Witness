@@ -1,5 +1,8 @@
 /**
  * WITNESS — Electron Main Process
+ * Updated: Loosened Python version check from 3.11+ to 3.10+.
+ *          Added Python 3.10 to all candidate lists (Windows + Linux).
+ *          Error screen text updated to say "3.10 OR LATER".
  *
  * Cross-platform: works on Windows and Linux (Mac feasible, untested).
  * Platform differences are handled inline with process.platform checks —
@@ -149,6 +152,9 @@ function _findOllamaPath() {
 }
 
 // ─── PYTHON DETECTION (dev mode only) ────────────────────────────────────────
+// Accepts Python 3.10 or higher. FastAPI + all Witness dependencies work on
+// 3.10+. The previous 3.11 minimum was unnecessarily strict and blocked users
+// who had 3.10 installed.
 
 function testPythonCommand(cmd, args) {
   return new Promise((resolve) => {
@@ -156,7 +162,8 @@ function testPythonCommand(cmd, args) {
       if (err) { resolve(null); return }
       const out   = (stdout + stderr).trim()
       const match = out.match(/Python 3\.(\d+)/)
-      if (match && parseInt(match[1]) >= 11) {
+      // Accept 3.10 and above (minor version >= 10)
+      if (match && parseInt(match[1]) >= 10) {
         resolve(cmd)
       } else {
         resolve(null)
@@ -168,17 +175,21 @@ function testPythonCommand(cmd, args) {
 async function findPython() {
   // On Windows, 'py' launcher lets you pick the exact version.
   // On Linux, python3 is the standard command; 'py' rarely exists.
+  // Candidates are tried in order — newest versions first so we always
+  // prefer the most capable Python available.
   const candidates = IS_WINDOWS
     ? [
         { cmd: 'py',      args: ['-3.13', '--version'] },
         { cmd: 'py',      args: ['-3.12', '--version'] },
         { cmd: 'py',      args: ['-3.11', '--version'] },
+        { cmd: 'py',      args: ['-3.10', '--version'] },  // added: 3.10 support
         { cmd: 'python3', args: ['--version'] },
         { cmd: 'python',  args: ['--version'] },
       ]
     : [
         { cmd: 'python3.12', args: ['--version'] },
         { cmd: 'python3.11', args: ['--version'] },
+        { cmd: 'python3.10', args: ['--version'] },  // added: 3.10 support
         { cmd: 'python3',    args: ['--version'] },
         { cmd: 'python',     args: ['--version'] },
       ]
@@ -261,7 +272,7 @@ async function startPythonBackend() {
   const python     = await findPython()
 
   if (!python) {
-    console.error('[PYTHON] No compatible Python installation found (need 3.11+)')
+    console.error('[PYTHON] No compatible Python installation found (need 3.10+)')
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('python-not-found')
     } else {

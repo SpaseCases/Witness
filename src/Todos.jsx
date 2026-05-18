@@ -4,21 +4,23 @@
  *
  * Save this file at: witness/src/Todos.jsx
  *
+ * Bug fixes (batch 10):
+ *   - TodoDetail.handleDelete used window.confirm() — blocked in Electron (always
+ *     returns true silently). Replaced with inline confirmingDelete state showing
+ *     CONFIRM / CANCEL buttons in the topbar.
+ *   - addNote: empty catch {} swallowed all errors silently. Added console.warn.
+ *   - fmtFullDate: bare new Date(dateStr) works for ISO timestamps but breaks for
+ *     date-only strings. Added T12:00:00 noon-anchor for 10-char strings.
+ *   - deleteTask: typeof task.id === 'number' changed to Number.isInteger() for
+ *     strict guard (typeof returns 'number' for floats too).
+ *   - toggleTask PATCH: added console.warn on failure so silent server errors
+ *     are at least visible in devtools.
+ *
  * Two views:
  *   LIST VIEW   — all todos, newest first. Click any item to open detail.
  *   DETAIL VIEW — full-screen detail for one todo: notes, source journal
  *                 excerpt, related todos from same entry. Back button returns
  *                 to list.
- *
- * Features:
- *   - Manual add (text input + ADD button)
- *   - AI-sourced badge + "FROM DATE" label on AI-generated items
- *   - PROJECT badge for items the AI flagged as multi-step projects
- *   - Append notes to any todo (manual text notes)
- *   - Delete individual notes
- *   - Delete entire todo
- *   - Mark done / undone
- *   - Flood of AI items handled server-side (20-item guard)
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -42,7 +44,10 @@ function fmtSourceDate(dateStr) {
 function fmtFullDate(dateStr) {
   if (!dateStr) return null
   try {
-    const d = new Date(dateStr)
+    // ISO timestamps parse fine; date-only strings need T12:00:00 to avoid
+    // UTC-midnight shifting the date back one day in UTC-negative timezones.
+    const s = dateStr.length === 10 ? dateStr + 'T12:00:00' : dateStr
+    const d = new Date(s)
     return d.toLocaleDateString('en-US', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
     }).toUpperCase()
@@ -51,15 +56,30 @@ function fmtFullDate(dateStr) {
   }
 }
 
+function getDueBadge(dueDateStr) {
+  if (!dueDateStr) return null
+  const today = new Date(); today.setHours(0,0,0,0)
+  const due   = new Date(dueDateStr + 'T00:00:00'); due.setHours(0,0,0,0)
+  const diff  = Math.round((due - today) / 86400000)  // days
+  if (diff < 0)  return { label: 'OVERDUE',       cls: 'todo-due-urgent' }
+  if (diff === 0) return { label: 'DUE TODAY',     cls: 'todo-due-urgent' }
+  if (diff === 1) return { label: 'DUE TOMORROW',  cls: 'todo-due-urgent' }
+  if (diff <= 3)  return { label: `DUE IN ${diff} DAYS`, cls: 'todo-due-soon' }
+  const d = new Date(dueDateStr + 'T00:00:00')
+  const mon = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase()
+  return { label: `DUE ${mon}`, cls: 'todo-due-normal' }
+}
+
 // ─── DETAIL VIEW ──────────────────────────────────────────────────────────────
 
 function TodoDetail({ todoId, onBack, onDelete, onToggleDone }) {
-  const [detail,      setDetail]      = useState(null)
-  const [loading,     setLoading]     = useState(true)
-  const [noteInput,   setNoteInput]   = useState('')
-  const [submitting,  setSubmitting]  = useState(false)
-  const [editingText, setEditingText] = useState(false)
-  const [editVal,     setEditVal]     = useState('')
+  const [detail,           setDetail]           = useState(null)
+  const [loading,          setLoading]          = useState(true)
+  const [noteInput,        setNoteInput]        = useState('')
+  const [submitting,       setSubmitting]       = useState(false)
+  const [editingText,      setEditingText]      = useState(false)
+  const [editVal,          setEditVal]          = useState('')
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const containerRef  = useRef(null)
   const noteRefs      = useRef({})
 
@@ -115,7 +135,9 @@ function TodoDetail({ todoId, onBack, onDelete, onToggleDone }) {
         setNoteInput('')
         await refreshDetail()
       }
-    } catch {} finally {
+    } catch (e) {
+      console.warn('[Todos] addNote failed:', e.message)
+    } finally {
       setSubmitting(false)
     }
   }
@@ -156,6 +178,18 @@ function TodoDetail({ todoId, onBack, onDelete, onToggleDone }) {
     } catch {}
   }
 
+  // Save due date from date picker
+  const saveDueDate = async (val) => {
+    try {
+      await fetch(`${API}/todos/${todoId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ due_date: val })
+      })
+      await refreshDetail()
+    } catch {}
+  }
+
   // Toggle done from detail view
   const handleToggle = async () => {
     if (!detail) return
@@ -171,14 +205,20 @@ function TodoDetail({ todoId, onBack, onDelete, onToggleDone }) {
     } catch {}
   }
 
-  // Delete the whole todo
+  // Delete the whole todo — two-step inline confirm (window.confirm blocked in Electron)
   const handleDelete = async () => {
-    if (!window.confirm('Delete this todo permanently?')) return
+    if (!confirmingDelete) {
+      setConfirmingDelete(true)
+      return
+    }
     try {
       await fetch(`${API}/todos/${todoId}`, { method: 'DELETE' })
       if (onDelete) onDelete(todoId)
       onBack()
-    } catch {}
+    } catch (e) {
+      console.warn('[Todos] handleDelete failed:', e.message)
+      setConfirmingDelete(false)
+    }
   }
 
   if (loading) {
@@ -217,9 +257,20 @@ function TodoDetail({ todoId, onBack, onDelete, onToggleDone }) {
           >
             {todo.done ? 'MARK UNDONE' : 'MARK DONE'}
           </button>
-          <button className="todos-action-btn todos-action-delete" onClick={handleDelete}>
-            DELETE
-          </button>
+          {!confirmingDelete ? (
+            <button className="todos-action-btn todos-action-delete" onClick={handleDelete}>
+              DELETE
+            </button>
+          ) : (
+            <>
+              <button className="todos-action-btn todos-action-delete" onClick={handleDelete}>
+                CONFIRM DELETE
+              </button>
+              <button className="todos-action-btn" onClick={() => setConfirmingDelete(false)}>
+                CANCEL
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -265,6 +316,24 @@ function TodoDetail({ todoId, onBack, onDelete, onToggleDone }) {
             <span className="todos-detail-meta-item todos-meta-done">
               COMPLETED: {fmtFullDate(todo.done_at)}
             </span>
+          )}
+        </div>
+
+        {/* Due date row */}
+        <div className="todos-detail-due-row">
+          <label className="todos-section-label" style={{ marginBottom: 0 }}>DUE DATE</label>
+          <input
+            className="todo-date-input"
+            type="date"
+            value={todo.due_date || ''}
+            onChange={e => saveDueDate(e.target.value)}
+          />
+          {todo.due_date && !todo.done && (() => {
+            const b = getDueBadge(todo.due_date)
+            return b ? <span className={`todo-due-badge ${b.cls}`}>{b.label}</span> : null
+          })()}
+          {todo.due_date && (
+            <button className="todos-clear-due-btn" onClick={() => saveDueDate('')}>CLEAR</button>
           )}
         </div>
       </div>
@@ -360,6 +429,7 @@ function TodoRow({ task, onClick, onToggle, onDelete, selectMode, isSelected, on
   const isAI      = !!task.source_entry_id
   const isProject = !!task.is_project
   const notes     = Array.isArray(task.notes) ? task.notes : []
+  const dueBadge  = !task.done ? getDueBadge(task.due_date) : null
 
   return (
     <div
@@ -406,6 +476,9 @@ function TodoRow({ task, onClick, onToggle, onDelete, selectMode, isSelected, on
           )}
           {notes.length > 0 && (
             <span className="todos-row-notes-count">{notes.length} NOTE{notes.length !== 1 ? 'S' : ''}</span>
+          )}
+          {dueBadge && (
+            <span className={`todo-due-badge ${dueBadge.cls}`}>{dueBadge.label}</span>
           )}
         </div>
       </div>
@@ -498,12 +571,15 @@ export default function Todos() {
     // Optimistic update
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, done: newDone } : t))
     try {
-      await fetch(`${API}/todos/${task.id}`, {
+      const res = await fetch(`${API}/todos/${task.id}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ done: newDone })
       })
-    } catch {}
+      if (!res.ok) console.warn(`[Todos] toggleTask PATCH returned ${res.status}`)
+    } catch (e) {
+      console.warn('[Todos] toggleTask fetch failed:', e.message)
+    }
   }, [])
 
   // Delete task
@@ -511,8 +587,10 @@ export default function Todos() {
     const el = rowRef?.current
     const doDelete = async () => {
       setTasks(prev => prev.filter(t => t.id !== task.id))
-      if (typeof task.id === 'number') {
-        try { await fetch(`${API}/todos/${task.id}`, { method: 'DELETE' }) } catch {}
+      if (Number.isInteger(task.id)) {
+        try { await fetch(`${API}/todos/${task.id}`, { method: 'DELETE' }) } catch (e) {
+          console.warn('[Todos] deleteTask fetch failed:', e.message)
+        }
       }
     }
 

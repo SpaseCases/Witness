@@ -4,7 +4,12 @@
  *
  * Save this file at: witness/src/Debrief.jsx
  *
- * Fixes vs the draft from the other Claude instance:
+ * Bug fixes (batch 10):
+ *   - runAnalysis: res.json() was called before res.ok check. A non-JSON 500
+ *     response would throw a confusing parse error rather than the actual
+ *     server problem. Fixed: res.ok checked first.
+ *
+ * Previous fixes (already applied):
  *   - fmtDate: YYYY-MM-DD strings now get T12:00:00 appended before parsing
  *     so they don't shift one day back in US timezones (UTC midnight bug)
  *   - Sparkline: null metric values are skipped rather than collapsed to 0,
@@ -200,6 +205,8 @@ export default function Debrief() {
   const [runMsg,         setRunMsg]         = useState('')
   const [days,           setDays]           = useState(30)
   const [tab,            setTab]            = useState('flags') // 'flags' | 'trends'
+  const [backfilling,    setBackfilling]    = useState(false)
+  const [backfillMsg,    setBackfillMsg]    = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -246,7 +253,9 @@ export default function Debrief() {
     setRunning(true)
     setRunMsg('Running AI analysis — this takes 30-60 seconds...')
     try {
-      const res  = await fetch(`${API}/insights/run-flags?days=${days}`, { method: 'POST' })
+      const res = await fetch(`${API}/insights/run-flags?days=${days}`, { method: 'POST' })
+      // Check ok before .json() — a non-JSON 500 body would throw a confusing parse error
+      if (!res.ok) throw new Error(`Backend returned ${res.status}`)
       const data = await res.json()
       if (data.status === 'insufficient_data') {
         setRunMsg(data.message)
@@ -256,11 +265,28 @@ export default function Debrief() {
       } else {
         setRunMsg('Analysis failed. Check the backend logs.')
       }
-    } catch {
-      setRunMsg('Could not reach backend.')
+    } catch (e) {
+      setRunMsg(`Could not reach backend: ${e.message}`)
     } finally {
       setRunning(false)
       setTimeout(() => setRunMsg(''), 6000)
+    }
+  }
+
+  const backfillMetrics = async () => {
+    setBackfilling(true)
+    setBackfillMsg('Extracting metrics from existing entries — this may take a few minutes...')
+    try {
+      const res  = await fetch(`${API}/transcribe/backfill-metrics`, { method: 'POST' })
+      if (!res.ok) throw new Error(`Backend returned ${res.status}`)
+      const data = await res.json()
+      setBackfillMsg(data.message || `Done. Processed ${data.processed} entries.`)
+      await load()
+    } catch (e) {
+      setBackfillMsg(`Backfill failed: ${e.message}`)
+    } finally {
+      setBackfilling(false)
+      setTimeout(() => setBackfillMsg(''), 8000)
     }
   }
 
@@ -441,7 +467,16 @@ export default function Debrief() {
               <span className="db-trends-sub">
                 {trends.length} data point{trends.length !== 1 ? 's' : ''}
               </span>
+              <button
+                className={`db-run-btn ${backfilling ? 'running' : ''}`}
+                onClick={backfillMetrics}
+                disabled={backfilling}
+                title="Extract metrics from entries that are missing them"
+              >
+                {backfilling ? 'EXTRACTING...' : 'BACKFILL METRICS'}
+              </button>
             </div>
+            {backfillMsg && <div className="db-run-msg">{backfillMsg}</div>}
             <TrendChart trends={trends} />
           </div>
         )}

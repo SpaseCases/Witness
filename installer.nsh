@@ -78,11 +78,12 @@
   OllamaDone:
 
     ; ── Remind user to pull the model ──────────────────────────────────────────
-    ; Even if Ollama is installed, the model still needs to be pulled.
-    ; Check if the model folder exists as a proxy for whether it was pulled.
+    ; Even if Ollama is installed, a model still needs to be pulled.
+    ; Check if the manifests directory exists and has any contents.
+    ; We don't check for a specific model — the user may have pulled anything.
 
     ReadEnvStr $3 USERPROFILE
-    StrCpy $4 "$3\.ollama\models\manifests\registry.ollama.ai\library\gemma4"
+    StrCpy $4 "$3\.ollama\models\manifests\registry.ollama.ai\library"
 
     IfFileExists "$4\*.*" ModelAlreadyPulled ModelNotPulled
 

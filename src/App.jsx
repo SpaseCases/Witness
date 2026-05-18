@@ -3,8 +3,18 @@
  *
  * Save this file at: witness/src/App.jsx
  *
+ * Bug fixes (batch 7):
+ *   - fmtSourceDate: use T12:00:00 noon anchor to fix off-by-one-day timezone bug
+ *   - addTask: handle non-ok HTTP responses (422 etc.) — previously silently dropped task
+ *   - toggleTask: removed dead `undone` variable (leftover from refactor)
+ *   - toggleTask: unified sort into single setTimeout path — fixes stale closure and
+ *     race condition between optimistic update and re-sort on un-done
+ *   - toggleTask: changed `typeof task.id === 'number'` to `Number.isInteger()` for strict guard
+ *   - onNavigate useEffect: added clarifying comment (no double-registration risk with
+ *     Electron IPC bridge, but documented intent explicitly)
+ *
  * Changes from Step 16:
- *   - Version bumped to 2.0.0 everywhere
+ *   - Version bumped to 3.0.0 everywhere
  *   - Dashboard To-Do List: real todos table via /todos API
  *   - Seed tasks with EXAMPLE badge for new users
  *   - Done tasks sink to bottom at 40% opacity
@@ -26,7 +36,6 @@ import WeeklyRecap  from './WeeklyRecap'
 import Settings     from './Settings'
 import Todos       from './Todos'
 import Chat        from './Chat'
-import Profile     from './Profile'
 import Export      from './Export'
 
 const API = 'http://127.0.0.1:8000'
@@ -34,7 +43,7 @@ const API = 'http://127.0.0.1:8000'
 const NAV = [
   { id: 'dashboard', label: 'COMMAND',  sub: 'Dashboard' },
   { id: 'journal',   label: 'RECORD',   sub: 'Entry' },
-  { id: 'memory',    label: 'MEMORY',   sub: 'AI Memory' },
+  { id: 'memory',    label: 'MEMORY',   sub: 'AI Memory & Self-Model' },
   { id: 'write',     label: 'WRITE',    sub: 'Text Entry' },
   { id: 'rant',      label: 'DUMP',     sub: 'Rant Mode' },
   { id: 'logs',      label: 'ARCHIVE',  sub: 'Log Browser' },
@@ -43,7 +52,6 @@ const NAV = [
   { id: 'health',    label: 'VITALS',   sub: 'Health Data' },
   { id: 'recap',     label: 'SITREP',   sub: 'Weekly Recap' },
   { id: 'chat',      label: 'CHAT',     sub: 'Journal Chat' },
-  { id: 'profile',   label: 'PROFILE',  sub: 'Self-Model' },
   { id: 'export',    label: 'EXPORT',   sub: 'Save Journal' },
   { id: 'settings',  label: 'CONFIG',   sub: 'Settings' },
 ]
@@ -58,11 +66,27 @@ const SEED_TASKS = [
 function fmtSourceDate(dateStr) {
   if (!dateStr) return null
   try {
-    const d = new Date(dateStr)
+    // Use T12:00:00 to avoid off-by-one-day errors when parsing date-only strings
+    // as UTC midnight (which renders as the previous day in negative-offset timezones)
+    const d = new Date(dateStr.slice(0, 10) + 'T12:00:00')
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase()
   } catch {
     return null
   }
+}
+
+function getDueBadge(dueDateStr) {
+  if (!dueDateStr) return null
+  const today = new Date(); today.setHours(0,0,0,0)
+  const due   = new Date(dueDateStr + 'T00:00:00'); due.setHours(0,0,0,0)
+  const diff  = Math.round((due - today) / 86400000)
+  if (diff < 0)   return { label: 'OVERDUE',             cls: 'todo-due-urgent' }
+  if (diff === 0) return { label: 'DUE TODAY',           cls: 'todo-due-urgent' }
+  if (diff === 1) return { label: 'DUE TOMORROW',        cls: 'todo-due-urgent' }
+  if (diff <= 3)  return { label: `DUE IN ${diff} DAYS`, cls: 'todo-due-soon' }
+  const d = new Date(dueDateStr + 'T00:00:00')
+  const mon = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase()
+  return { label: `DUE ${mon}`, cls: 'todo-due-normal' }
 }
 
 // ─── TITLE BAR ────────────────────────────────────────────────────────────────
@@ -116,7 +140,7 @@ function Sidebar({ active, onNav, ollamaStatus }) {
       </ul>
 
       <div className="sidebar-foot">
-        <span className="sidebar-foot-text">WITNESS v2.0.0</span>
+        <span className="sidebar-foot-text">WITNESS v3.0.0</span>
         <span className="sidebar-foot-text">BUILD 2026.04</span>
       </div>
     </nav>
@@ -158,6 +182,32 @@ function getStressColor(val) {
   if (val >= 7.5) return 'stress-high'
   if (val >= 5)   return 'stress-mid'
   return 'stress-low'
+}
+
+// ─── STEP 6: Dashboard assessment helpers ────────────────────────────────────
+
+// Returns an inline style for the LAST ENTRY card left border
+// based on the stress level of the most recent entry.
+function getLastEntryBorderStyle(metrics) {
+  if (!metrics || metrics.stress == null) return {}
+  if (metrics.stress >= 7.5) return { borderLeft: '3px solid #e05050' }
+  if (metrics.stress >= 5.5) return { borderLeft: '3px solid #c38c32' }
+  return {}
+}
+
+// Builds an array of { label, color } flag tags from last entry metrics.
+// Mirrors the severity logic in the Insights/Flags screen.
+function buildAssessmentFlags(metrics) {
+  if (!metrics) return []
+  const flags = []
+  if (metrics.stress      >= 7.5) flags.push({ label: 'HIGH STRESS',     color: '#e05050' })
+  else if (metrics.stress >= 5.5) flags.push({ label: 'ELEVATED STRESS', color: '#c38c32' })
+  if (metrics.mood        != null && metrics.mood       <= 3.5) flags.push({ label: 'LOW MOOD',        color: '#e05050' })
+  if (metrics.anxiety     != null && metrics.anxiety    >= 7)   flags.push({ label: 'HIGH ANXIETY',    color: '#e05050' })
+  if (metrics.energy      != null && metrics.energy     <= 3)   flags.push({ label: 'LOW ENERGY',      color: '#c38c32' })
+  if (metrics.mental_clarity != null && metrics.mental_clarity <= 3) flags.push({ label: 'FOGGY',      color: '#c38c32' })
+  if (metrics.productivity   != null && metrics.productivity   <= 3) flags.push({ label: 'LOW OUTPUT', color: '#888' })
+  return flags.slice(0, 4)
 }
 
 // ─── TO-DO LIST CARD ──────────────────────────────────────────────────────────
@@ -219,9 +269,15 @@ function TodoCard({ backendReady }) {
             )
           }
         }, 20)
+      } else {
+        // Backend returned an error (e.g. 422 validation) — fall back to local task
+        // so the UI is never left in a broken state
+        console.warn(`[TodoCard] POST /todos/ returned ${res.status}`)
+        const local = { id: `local-${Date.now()}`, text, done: false, source_date: null }
+        setTasks(prev => [local, ...prev])
       }
     } catch {
-      // Backend offline — add locally so UI isn't broken
+      // Network failure — add locally so UI isn't broken
       const local = { id: `local-${Date.now()}`, text, done: false, source_date: null }
       setTasks(prev => [local, ...prev])
     }
@@ -238,8 +294,6 @@ function TodoCard({ backendReady }) {
       // Animate strikethrough: find the text span inside the task element
       const textEl = el.querySelector('.todo-text')
       if (textEl) {
-        // The strikethrough line starts at 0 width and expands to 100%
-        // We do this by animating a pseudo-overlay div we inject temporarily
         gsap.fromTo(textEl,
           { opacity: 1, textDecorationColor: 'transparent' },
           { opacity: 0.4, textDecorationColor: '#505050', duration: 0.35, ease: 'power2.inOut' }
@@ -255,39 +309,32 @@ function TodoCard({ backendReady }) {
       }
     }
 
-    // Optimistic update
+    // Optimistic update — apply the done state change first
     setTasks(prev => prev.map(t =>
       t.id === task.id ? { ...t, done: newDone } : t
     ))
 
-    // Sink done task to bottom after animation
-    if (newDone) {
-      setTimeout(() => {
-        setTasks(prev => {
-          const undone = prev.filter(t => t.id !== task.id || !newDone ? !t.done : false)
-          const done   = prev.filter(t => t.done)
-          // Re-sort: undone first (newest first), done after
-          const allUndone = prev.filter(t => t.id === task.id ? false : !t.done)
-          const allDone   = prev.filter(t => t.id === task.id ? true : t.done)
-          return [...allUndone, ...allDone]
-        })
-      }, 380)
-    } else {
+    // Re-sort after the optimistic update settles so we work off up-to-date state.
+    // For marking done: wait for animation to finish before sinking to bottom.
+    const sortDelay = newDone ? 380 : 0
+    setTimeout(() => {
       setTasks(prev => {
-        const allUndone = prev.filter(t => !t.done)
-        const allDone   = prev.filter(t => t.done && t.id !== task.id)
+        // Use the task's id to know its final state; everything else reads from prev
+        const allUndone = prev.filter(t => (t.id === task.id ? !newDone : !t.done))
+        const allDone   = prev.filter(t => (t.id === task.id ?  newDone :  t.done))
         return [...allUndone, ...allDone]
       })
-    }
+    }, sortDelay)
 
-    if (typeof task.id === 'number') {
+    // Persist to backend — only for real (persisted) tasks
+    if (Number.isInteger(task.id)) {
       try {
         await fetch(`${API}/todos/${task.id}`, {
           method:  'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ done: newDone })
         })
-      } catch { /* silently ignore */ }
+      } catch { /* silently ignore — optimistic update already applied */ }
     }
   }, [])
 
@@ -357,6 +404,7 @@ function TodoCard({ backendReady }) {
 
         {!loading && displayTasks.map(task => {
           const srcLabel = fmtSourceDate(task.source_date)
+          const dueBadge = !task.done ? getDueBadge(task.due_date) : null
           return (
             <div
               key={task.id}
@@ -380,6 +428,9 @@ function TodoCard({ backendReady }) {
                 <span className="todo-text">{task.text}</span>
                 {srcLabel && (
                   <span className="todo-source">FROM: {srcLabel}</span>
+                )}
+                {dueBadge && (
+                  <span className={`todo-due-badge ${dueBadge.cls}`}>{dueBadge.label}</span>
                 )}
               </div>
 
@@ -487,18 +538,21 @@ function Dashboard({ onRant, onRecord, refreshKey, backendReady }) {
           <div className="record-hint">
             {todayDone
               ? "TODAY'S ENTRY IS SAVED. TAP TO ADD ANOTHER."
-              : 'CLICK TO RECORD YOUR DAILY ENTRY\nAI WILL TRANSCRIBE AND ANALYZE'
+              : 'CLICK TO BEGIN — AI TRANSCRIBES AND ANALYZES'
             }
           </div>
           <button className="rant-btn" onClick={onRant}>+ RANT MODE</button>
         </div>
 
         {/* LAST ENTRY — row 1, col 2 */}
-        <div className="d-card">
+        <div className="d-card" style={getLastEntryBorderStyle(stats?.last_entry?.metrics)}>
           <div className="card-label">LAST ENTRY</div>
           <div className="card-value" style={{ fontSize: stats?.last_entry ? '16px' : undefined }}>
             {lastEntryDisplay.line1}
           </div>
+          {lastEntryDisplay.line2 && lastEntryDisplay.line2 !== 'NO TRANSCRIPT' && (
+            <div className="card-label" style={{ marginTop: 4 }}>LAST NOTE</div>
+          )}
           <div className="card-sub">{lastEntryDisplay.line2}</div>
         </div>
 
@@ -511,7 +565,37 @@ function Dashboard({ onRant, onRecord, refreshKey, backendReady }) {
           <div className="card-sub">7 DAY AVERAGE</div>
         </div>
 
-        {/* TO-DO LIST — row 2, cols 2-3 */}
+        {/* LAST ENTRY ASSESSMENT — row 2, cols 2-3 */}
+        {(() => {
+          const metrics = stats?.last_entry?.metrics
+          const flags   = buildAssessmentFlags(metrics)
+          return (
+            <div className="d-card d-card-assessment">
+              <div className="card-label">LAST ENTRY ASSESSMENT</div>
+              {metrics == null ? (
+                <div className="assessment-pending">
+                  {stats?.last_entry ? 'METRICS PENDING' : 'NO ENTRIES YET'}
+                </div>
+              ) : flags.length === 0 ? (
+                <div className="assessment-clear">NO FLAGS — ALL METRICS NOMINAL</div>
+              ) : (
+                <div className="assessment-flags">
+                  {flags.map((f, i) => (
+                    <span
+                      key={i}
+                      className="assessment-flag-tag"
+                      style={{ color: f.color, borderColor: f.color }}
+                    >
+                      {f.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* TO-DO LIST — row 3, cols 2-3 */}
         <TodoCard backendReady={backendReady} />
 
         {/* FLAGS — row 3, cols 2-3 */}
@@ -590,7 +674,7 @@ function PythonMissingScreen() {
         marginBottom: '40px',
         textAlign: 'center',
       }}>
-        WITNESS NEEDS PYTHON 3.11 OR LATER TO RUN ITS AI BACKEND
+        WITNESS NEEDS PYTHON 3.10 OR LATER TO RUN ITS AI BACKEND
       </div>
 
       {/* Instructions box */}
@@ -614,7 +698,7 @@ function PythonMissingScreen() {
 
         {[
           'Go to python.org/downloads',
-          'Download Python 3.12 (the big yellow button)',
+          'Download Python 3.12 or any 3.10+ version (the big yellow button)',
           'Run the installer',
           ['IMPORTANT:', ' During install, check the box that says "Add Python to PATH" — easy to miss'],
           'Restart Witness',
@@ -659,7 +743,7 @@ function PythonMissingScreen() {
           lineHeight: '1.7',
         }}>
           ALREADY HAVE PYTHON? OPEN WINDOWS TERMINAL AND TYPE: python --version<br />
-          YOU NEED TO SEE "PYTHON 3.11" OR HIGHER.
+          YOU NEED TO SEE "PYTHON 3.10" OR HIGHER.
         </div>
       </div>
 
@@ -969,6 +1053,8 @@ export default function App() {
     if (window.witness?.onNavigate) {
       window.witness.onNavigate((screen) => setPage(screen))
     }
+    // No cleanup needed — Electron IPC listeners are managed by the preload bridge.
+    // Returning undefined is intentional.
   }, [])
 
   const goTo = (newPage) => {
@@ -1008,7 +1094,6 @@ export default function App() {
       case 'recap':     return <WeeklyRecap />
       case 'todos':     return <Todos />
       case 'chat':      return <Chat />
-      case 'profile':   return <Profile />
       case 'export':    return <Export />
       case 'settings':  return <Settings />
       default:          return (

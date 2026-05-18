@@ -1,5 +1,10 @@
+# Bug fix: update_qa body typed as raw dict (FastAPI 422 on all PATCH /qa calls) —
+#          replaced with QAAnswerUpdate BaseModel for proper request parsing.
 """
 WITNESS -- Entries API
+# Updated: get_dashboard_stats now also fetches metrics for the last entry
+#           and returns them as last_entry["metrics"] for the dashboard
+#           assessment card and stress border (Step 6).
 CRUD operations for journal entries (daily + rant).
 
 ROUTE ORDER NOTE: In FastAPI, routes match top-to-bottom.
@@ -56,6 +61,10 @@ class QAPairCreate(BaseModel):
 
 class BulkDeleteBody(BaseModel):
     ids: List[int]
+
+
+class QAAnswerUpdate(BaseModel):
+    answer: str = ""
 
 
 # ─── NAMED ROUTES FIRST (before wildcard /{entry_id}) ────────────────────────
@@ -141,6 +150,26 @@ def get_dashboard_stats():
                 "preview":    preview,
                 "type":       last["type"],
             }
+
+            # Fetch metrics for the last entry — used by the dashboard
+            # assessment card and LAST ENTRY card stress border.
+            metrics_row = conn.execute("""
+                SELECT stress, mood, anxiety, energy, mental_clarity, productivity
+                FROM   metrics
+                WHERE  entry_id = ?
+            """, (last["id"],)).fetchone()
+
+            if metrics_row:
+                last_entry["metrics"] = {
+                    "stress":         metrics_row["stress"],
+                    "mood":           metrics_row["mood"],
+                    "anxiety":        metrics_row["anxiety"],
+                    "energy":         metrics_row["energy"],
+                    "mental_clarity": metrics_row["mental_clarity"],
+                    "productivity":   metrics_row["productivity"],
+                }
+            else:
+                last_entry["metrics"] = None
 
         avg_row = conn.execute("""
             SELECT ROUND(AVG(m.stress), 1) as avg_stress
@@ -454,9 +483,9 @@ def add_qa(entry_id: int, body: QAPairCreate):
 
 
 @router.patch("/{entry_id}/qa/{qa_id}")
-def update_qa(entry_id: int, qa_id: int, body: dict):
+def update_qa(entry_id: int, qa_id: int, body: QAAnswerUpdate):
     """Update an answer to a follow-up question."""
-    answer = body.get("answer", "")
+    answer = body.answer
     conn = get_conn()
     try:
         conn.execute(

@@ -1,3 +1,6 @@
+# Bug fix: generate() calls updated with num_ctx=16384 and repeat_penalty=1.1
+#          for recap tasks that aggregate a full week of entries; temperature
+#          corrected to 0.6 per task table (was 0.55).
 """
 WITNESS — Weekly Recap API  (Step 14)
 Mon–Sun calendar week. Generated on demand, cached until next Monday.
@@ -13,7 +16,6 @@ Endpoints:
 import json
 import logging
 from datetime import date, timedelta, datetime
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
@@ -282,7 +284,7 @@ def build_prompt(data: dict) -> str:
 async def generate_and_cache(week_start: str, data: dict, conn) -> dict:
     """Call the AI, parse the JSON, save to weekly_recaps, return the result."""
     prompt   = build_prompt(data)
-    response = await generate(prompt, temperature=0.55, max_tokens=1200)
+    response = await generate(prompt, temperature=0.6, max_tokens=1200, num_ctx=16384, repeat_penalty=1.1)
 
     try:
         clean = clean_llm_json(response)

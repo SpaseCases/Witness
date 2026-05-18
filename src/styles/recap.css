@@ -577,3 +577,50 @@
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+
+/* ── TAB TOGGLE — newspaper section selector style ───────────────────────── */
+
+.sr-tab-toggle {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  border: none;
+  background: transparent;
+}
+
+.sr-tab-btn {
+  padding: 10px 20px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 3px;
+  color: #404040;
+  background: transparent;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: 2px solid transparent;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: color 0.12s, border-color 0.12s;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.sr-tab-btn:first-child {
+  border-right: 1px solid #2a2a2a;
+}
+
+.sr-tab-btn:hover {
+  color: #707070;
+  background: transparent;
+}
+
+.sr-tab-btn.active {
+  color: #f5a830;
+  border-bottom: 2px solid #f5a830;
+  background: transparent;
+}

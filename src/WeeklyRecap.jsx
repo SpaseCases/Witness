@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect } from 'react'
+import './styles/recap.css'
 
 const API = 'http://127.0.0.1:8000'
 
@@ -217,15 +218,7 @@ function WeeklyTab() {
     }
   }
 
-  const loadWeekData = async () => {
-    try {
-      const res  = await fetch(`${API}/recap/week-data`)
-      const data = await res.json()
-      setRecap(prev => prev ? prev : { status: 'no_data', ...data })
-    } catch (_) {}
-  }
-
-  useEffect(() => { loadWeekData().then(() => load()) }, [])
+  useEffect(() => { load() }, [])
 
   const handleExport = async () => {
     try {
@@ -635,12 +628,6 @@ function MonthlyTab() {
         </>
       )}
 
-      {error && (
-        <div className="sr-error">
-          <span className="sr-error-label">ERROR</span>
-          <span>{error}</span>
-        </div>
-      )}
     </>
   )
 }
