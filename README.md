@@ -21,6 +21,7 @@ Witness records your voice, transcribes it locally, and uses a local AI to track
 - **Structured entry summaries** — each entry gets a one-sentence summary, bullet highlights, and any intentions you stated, generated automatically alongside the transcript
 - **AI follow-up questions** — after every entry, the AI generates 3 honest follow-up questions based specifically on what you said. Memory-aware: it references patterns from past entries when relevant
 - **Behavioral flags** — surfaces honest patterns it notices across your entries
+- **Screen time tracking** — log daily phone/screen hours manually from the VITALS screen. Overlaid against your mood and energy scores so you can see if high screen time correlates with worse days
 - **Health correlation** — import Apple Health data and overlay HRV, sleep, and resting heart rate against your journal metrics on a dual-axis chart. The AI reads 30 days of paired data and writes a plain-English pattern summary
 - **Weekly recap** — AI-generated summary of the week with pattern observations
 - **Monthly recap** — deeper longitudinal view of the past 30 days: what shifted, recurring themes, notable highs and lows, one honest behavioral observation
@@ -29,7 +30,7 @@ Witness records your voice, transcribes it locally, and uses a local AI to track
 - **Self-model (PROFILE)** — a living summary of your patterns, values, recurring concerns, and emotional tendencies built from all your entries. Regenerates as you add more
 - **Semantic search** — find past entries by meaning, not just keywords
 - **Auto-generate context** — one click in CONFIG generates a personal context document from all your entries, which gets injected into every AI prompt
-- **To-do extraction** — the AI automatically pulls any tasks or intentions you mentioned and adds them to a to-do list
+- **To-do extraction** — the AI automatically pulls any tasks or intentions you mentioned and adds them to a to-do list. Due dates are extracted from context ("study for test on Tuesday") and shown as urgency badges. Overdue tasks are flagged automatically
 - **Export** — save your full journal or any date range as a PDF or plain text file, locally, with one click
 
 ---
@@ -37,6 +38,8 @@ Witness records your voice, transcribes it locally, and uses a local AI to track
 ## Who Built This
 
 I'm a high school student. I built Witness for myself because I wanted a journaling tool that was actually private and didn't try to sell me a subscription. I used Claude (Anthropic's AI) to help write most of the code. I designed it, tested it, broke it, fixed it, and use it daily on my own machine.
+
+Version 3.0.0 went through a full systematic audit — AI parameter tuning, database optimization, cross-platform portability fixes, transcription accuracy improvements, and a complete screen time tracking feature.
 
 This is not a startup. There's no team. Bug fixes will happen when I have time. If something breaks and you know how to fix it, pull requests are welcome.
 
@@ -177,6 +180,10 @@ No analytics. No telemetry. No account. No cloud. The database file is yours.
 - Record at least a few entries first, then click "BUILD MEMORY NOW" from the MEMORY screen
 - Memory builds automatically after each entry going forward — the first build is manual
 
+**Screen time not showing on charts**
+- Make sure you've logged at least a few days of hours from the VITALS screen
+- The chart only plots days where both a journal entry and a screen time value exist
+
 **Correlation chart shows "NO PAIRED DATA"**
 - You need journal entries and Apple Health data on the same dates
 - Try a wider date range (60 days instead of 30)
@@ -188,20 +195,23 @@ No analytics. No telemetry. No account. No cloud. The database file is yours.
 
 ## Changing the AI Model
 
-Witness defaults to `gemma4:3b`. From CONFIG you can browse and download other models.
+Witness defaults to `gemma4:e2b`. From CONFIG you can browse and download other models directly inside the app.
 
 | Model | Size | RAM Needed | Notes |
 |---|---|---|---|
-| gemma4:3b | 3GB | 8GB | Default. Good for most machines |
-| llama3.2:3b | 2GB | 8GB | Faster, slightly less nuanced |
-| deepseek-r1:14b | 9GB | 16GB | Best quality. What I run |
-| deepseek-r1:32b | 20GB | 32GB | Maximum. Needs serious hardware |
+| gemma4:e2b | 7GB | 8GB | Default. Multimodal, thinking mode, fast |
+| qwen3:4b | 2.5GB | 8GB | Very fast, 256K context |
+| llama3.2:3b | 2GB | 8GB | Minimal footprint, good on older hardware |
+| deepseek-r1:8b | 5GB | 8GB | Reasoning model, strong for analysis |
+| deepseek-r1:14b | 9GB | 16GB | Best quality in the mid range. What I run |
+| qwen3:14b | 9GB | 16GB | Strong all-rounder, thinking mode |
+| deepseek-r1:32b | 20GB | 32GB | Maximum quality. Needs serious hardware |
 
 ---
 
 ## Running From Source
 
-**You need:** Node.js 20+, Python 3.11 or 3.12, Ollama
+**You need:** Node.js 20+, Python 3.10 or later, Ollama
 
 **Windows:**
 ```
